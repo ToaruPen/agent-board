@@ -1,7 +1,5 @@
 set shell := ["bash", "-cu"]
 
-export PATH := env_var("HOME") + "/.local/bin:" + env_var("PATH")
-
 check:
     npm run fmt:check
     npm run lint
