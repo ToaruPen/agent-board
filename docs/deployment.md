@@ -11,7 +11,7 @@ This document lists the operator steps that remain outside the repo. No step her
 5. Create one MCP token. Put its SHA 256 hash in the Worker secret named `MCP_TOKEN_SHA256`. Put the plain token only in MCP client configuration.
 6. Deploy once from the operator machine with `just deploy`. Confirm the board loads behind Access and that an unauthenticated request is rejected.
 7. Create the GitHub repo as public. Turn on secret scanning and push protection before the first push. Add branch protection on `main` that requires the check workflow.
-8. Add GitHub Secrets for CI deploy. The deploy workflow runs only from `main` and from tags. It needs a scoped Cloudflare token and the account id as secrets. Names are in `.github/workflows/deploy.yml`.
+8. Add GitHub Secrets for CI deploy. One pipeline, `.github/workflows/ci-cd.yml`, runs the check matrix first and deploys only when it passes, only from `main`, from `v*` tags, or by manual dispatch. It needs a scoped Cloudflare token (`CLOUDFLARE_API_TOKEN`) and the account id (`CLOUDFLARE_ACCOUNT_ID`) as secrets. Until both exist, the deploy job ends after a cheap preflight step with a warning and a skipped notice, so the pipeline stays green and spends no install time.
 9. Run the auth spike with real clients before rollout. Connect Claude Code, Codex, and one more MCP client to the real `/mcp` endpoint. Confirm each one can list tools and call `list_sessions`. Record the result outside the public repo if it contains the real hostname.
 
 ## Per machine rollout
@@ -43,5 +43,5 @@ The Windows Codex app may not fire file based hooks. Probe before relying on hoo
 ## Rollback
 
 - To cut off one machine, remove its hash from `MACHINE_TOKENS_JSON` and deploy. See `SECURITY.md`.
-- To roll back the Worker, redeploy the previous git tag through the deploy workflow.
+- To roll back the Worker, redeploy the previous git tag through the ci-cd pipeline.
 - Sender problems never block the CLIs. The hook exits 0 in every case and the daemon can be stopped per machine.
