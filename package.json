@@ -8,7 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/build-ui.mjs",
+    "build": "tsc -p tsconfig.json && node scripts/build-ui.mjs && node scripts/build-hook.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "tsx --test tests/*.test.ts",
     "fmt": "biome format --write .",
@@ -26,7 +26,8 @@
     "sender": "tsx src/sender/hook.ts",
     "daemon": "tsx src/sender/daemon.ts",
     "build:ui": "node scripts/build-ui.mjs",
-    "perf": "node scripts/perf-local.mjs"
+    "perf": "node scripts/perf-local.mjs",
+    "violations": "node scripts/planted-violations.mjs"
   },
   "dependencies": {},
   "devDependencies": {

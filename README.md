@@ -45,7 +45,7 @@ State has four dimensions. Lifecycle is active, ended, or failed. Activity is ru
 You need a Cloudflare account, Node 22 or later, and `just`.
 
 1. Clone this repo and run `npm install`.
-2. Copy `wrangler.toml.example` values into your own `wrangler.toml`. Replace every `REPLACE_ME` placeholder with your own values. The committed file carries placeholders only.
+2. Replace every `REPLACE_ME` placeholder in `wrangler.toml` with your own values in your private deployment copy. The committed file carries placeholders only.
 3. Create the board with `npx wrangler deploy` after `npx wrangler login`, or use the deploy workflow described in `docs/deployment.md`.
 4. Put a Cloudflare Access application in front of the board hostname. Keep the hostname out of public material.
 5. Add one ingest token per machine. The Worker stores a hash only. See `SECURITY.md` for issue and rotation steps.
@@ -128,6 +128,10 @@ Stored data sits in the hub behind Cloudflare Access. It never enters this publi
 - The Windows Codex app may not fire file based hooks. This repo ships an isolated transcript watcher interface for that case. See `docs/deployment.md`.
 - Machine clocks can skew. The server receive time is the ordering truth.
 - The board shows the last known state. A silent machine may be offline or may have a broken sender. The heartbeat row separates those cases, and a stale heartbeat marks the machine offline.
+
+## Performance and cost
+
+Cost stays bounded by design. The spool has byte, file count, and per file caps. The daemon coalesces tool pulses over a 3 second window and sends batches of up to 50 events. The Durable Object writes a session row once per changed session per batch, throttles last seen writes to one per 30 seconds, and keeps at most 200 events per session and 10,000 events in total. WebSocket updates go out only for changed rows. Heartbeats run every 60 seconds and write at most once per 30 seconds per machine. Retries back off up to a 30 second cap and dead letter after 5 attempts. Every cap lives in `src/shared/perf.ts`. The full budget table and cost model are in `docs/performance.md`. Run `just perf` for the measured local proof.
 
 ## Development
 

@@ -9,6 +9,7 @@ export interface StoreMetrics {
   broadcasts: number;
   eventWrites: number;
   heartbeatWrites: number;
+  ingestRequests: number;
   sessionWrites: number;
 }
 
@@ -42,6 +43,7 @@ export class MemoryBoardBackend implements BoardBackend {
     broadcasts: 0,
     eventWrites: 0,
     heartbeatWrites: 0,
+    ingestRequests: 0,
     sessionWrites: 0,
   };
   private currentSequence = 0;
@@ -165,7 +167,6 @@ export class MemoryBoardBackend implements BoardBackend {
 }
 
 export interface SqlCursor<T> {
-  one(): T | null;
   toArray(): T[];
 }
 
@@ -193,6 +194,7 @@ export class SqlBoardBackend implements BoardBackend {
     broadcasts: 0,
     eventWrites: 0,
     heartbeatWrites: 0,
+    ingestRequests: 0,
     sessionWrites: 0,
   };
   private readonly sql: SqlStorage;
@@ -231,11 +233,13 @@ export class SqlBoardBackend implements BoardBackend {
   }
 
   countEvents(): number {
-    return this.sql.exec<CountRow>("SELECT COUNT(*) AS count FROM events").one()?.count ?? 0;
+    return this.sql.exec<CountRow>("SELECT COUNT(*) AS count FROM events").toArray()[0]?.count ?? 0;
   }
 
   countSessions(): number {
-    return this.sql.exec<CountRow>("SELECT COUNT(*) AS count FROM sessions").one()?.count ?? 0;
+    return (
+      this.sql.exec<CountRow>("SELECT COUNT(*) AS count FROM sessions").toArray()[0]?.count ?? 0
+    );
   }
 
   deleteOldestEvents(keep: number, sessionId?: string): number {
@@ -269,14 +273,14 @@ export class SqlBoardBackend implements BoardBackend {
   getMachine(machineId: string): MachineRow | null {
     const row = this.sql
       .exec<KeyValueRow>("SELECT row_json AS value FROM machines WHERE machine_id = ?", machineId)
-      .one();
+      .toArray()[0];
     return row ? (JSON.parse(row.value) as MachineRow) : null;
   }
 
   getSession(sessionId: string): SessionRow | null {
     const row = this.sql
       .exec<KeyValueRow>("SELECT row_json AS value FROM sessions WHERE session_id = ?", sessionId)
-      .one();
+      .toArray()[0];
     return row ? (JSON.parse(row.value) as SessionRow) : null;
   }
 
@@ -284,7 +288,7 @@ export class SqlBoardBackend implements BoardBackend {
     return (
       (this.sql
         .exec<CountRow>("SELECT COUNT(*) AS count FROM events WHERE event_id = ?", eventId)
-        .one()?.count ?? 0) > 0
+        .toArray()[0]?.count ?? 0) > 0
     );
   }
 
@@ -386,7 +390,9 @@ export class SqlBoardBackend implements BoardBackend {
   }
 
   sequence(): number {
-    const row = this.sql.exec<KeyValueRow>("SELECT value FROM meta WHERE key = 'board_seq'").one();
+    const row = this.sql
+      .exec<KeyValueRow>("SELECT value FROM meta WHERE key = 'board_seq'")
+      .toArray()[0];
     return row ? Number(row.value) : 0;
   }
 }
@@ -414,6 +420,7 @@ export class BoardService {
     envelopes: ReturnType<typeof parseEnvelope>[],
     receivedAt = new Date().toISOString(),
   ): IngestResult {
+    this.backend.metrics.ingestRequests += 1;
     let accepted = 0;
     let duplicates = 0;
     const changed: SessionRow[] = [];

@@ -29,3 +29,9 @@ tail:
 
 e2e:
     npm run e2e
+
+perf:
+    npm run perf
+
+violations:
+    npm run violations

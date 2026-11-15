@@ -321,7 +321,14 @@ export async function flushOnce(
 async function main(): Promise<void> {
   const config = loadConfig();
   const once = process.argv.includes("--once");
-  const runner = new DaemonRunner(config);
+  const runner = new DaemonRunner(config, {
+    maxAttempts: Math.min(
+      10,
+      Math.max(1, Number(process.env.AGENT_BOARD_RETRY_MAX_ATTEMPTS ?? PERF.retryMaxAttempts)),
+    ),
+    retryBaseMs: Math.max(10, Number(process.env.AGENT_BOARD_RETRY_BASE_MS ?? PERF.retryBaseMs)),
+    retryMaxMs: Math.max(10, Number(process.env.AGENT_BOARD_RETRY_MAX_MS ?? PERF.retryMaxMs)),
+  });
   if (once) {
     await runner.flushAll();
     await runner.heartbeat();

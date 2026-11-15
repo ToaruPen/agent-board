@@ -52,6 +52,13 @@ export function listSpoolFiles(spoolDir: string): string[] {
     .map((name) => join(spoolDir, name));
 }
 
+export function spoolByteStats(spoolDir: string): { bytes: number; files: number } {
+  let bytes = 0;
+  const files = listSpoolFiles(spoolDir);
+  for (const file of files) bytes += statSync(file).size;
+  return { bytes, files: files.length };
+}
+
 export function spoolStats(spoolDir: string): { bytes: number; files: number; lines: number } {
   let bytes = 0;
   let lines = 0;
@@ -126,10 +133,10 @@ export function appendEnvelope(
   const lineBytes = Buffer.byteLength(line);
   if (lineBytes > caps.maxFileBytes) return { droppedToolEvents: 0, path: null, spooled: false };
   let dropped = 0;
-  let stats = spoolStats(spoolDir);
+  let stats = spoolByteStats(spoolDir);
   if (stats.bytes + lineBytes > caps.maxBytes || stats.files >= caps.maxFiles) {
     dropped += pruneLines(spoolDir, stats.bytes + lineBytes - caps.maxBytes + 1024, true);
-    stats = spoolStats(spoolDir);
+    stats = spoolByteStats(spoolDir);
     if (stats.bytes + lineBytes > caps.maxBytes) {
       pruneLines(spoolDir, stats.bytes + lineBytes - caps.maxBytes + 1024, false);
     }
@@ -158,7 +165,10 @@ export function appendEnvelope(
       Buffer.byteLength(markerLine),
       caps,
     );
-    if (markerPath && spoolStats(spoolDir).bytes + Buffer.byteLength(markerLine) <= caps.maxBytes) {
+    if (
+      markerPath &&
+      spoolByteStats(spoolDir).bytes + Buffer.byteLength(markerLine) <= caps.maxBytes
+    ) {
       appendFileSync(markerPath, markerLine);
     }
   }
