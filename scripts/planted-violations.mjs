@@ -5,7 +5,10 @@ import { join } from "node:path";
 const dir = mkdtempSync(join(process.cwd(), ".violations-"));
 
 function run(args) {
-  const outcome = spawnSync("npx", args, { encoding: "utf8" });
+  const outcome = spawnSync("npx", args, {
+    encoding: "utf8",
+    shell: process.platform === "win32",
+  });
   return { output: `${outcome.stdout ?? ""}${outcome.stderr ?? ""}`, status: outcome.status ?? 1 };
 }
 

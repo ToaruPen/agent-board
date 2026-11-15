@@ -6,9 +6,10 @@ const dir = mkdtempSync(join(process.cwd(), ".canary-"));
 const fakeKey = `${"ghp_"}${"A".repeat(36)}`;
 try {
   writeFileSync(join(dir, "canary.txt"), `github_token = ${fakeKey}\n`);
+  const secretlintBin = join(process.cwd(), "node_modules", "secretlint", "bin", "secretlint.js");
   const result = spawnSync(
-    "npx",
-    ["secretlint", "--secretlintrc", ".secretlintrc.json", `${dir}/canary.txt`],
+    process.execPath,
+    [secretlintBin, "--secretlintrc", ".secretlintrc.json", join(dir, "canary.txt")],
     { encoding: "utf8", shell: false },
   );
   const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
