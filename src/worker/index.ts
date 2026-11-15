@@ -130,6 +130,9 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
     if (url.pathname === "/api/sessions") return json({ sessions: DEMO_SESSIONS });
     if (url.pathname === "/api/machines") return json({ machines: DEMO_MACHINES });
   }
+  if (url.pathname === "/api/demo/seed" && request.method === "POST" && localBypass(env)) {
+    return forward(env, "/internal/demo-seed", request, "{}");
+  }
   if (url.pathname === "/api/stream") return forward(env, "/internal/stream", request);
   if (url.pathname === "/api/sessions") return forward(env, "/internal/sessions", request);
   if (url.pathname === "/api/machines") return forward(env, "/internal/machines", request);

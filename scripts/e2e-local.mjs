@@ -161,6 +161,15 @@ try {
     writeFileSync(join(home, "token"), machineToken);
 
     stage("worker-ready");
+    const page = await fetch(`${base}/`);
+    assert(page.ok, "board page should load");
+    const pageText = await page.text();
+    assert(pageText.includes("Agent Board"), "board page should contain the title");
+    const appJs = await fetch(`${base}/app.js`);
+    assert(appJs.ok, "board script should load");
+    const demoResponse = await fetch(`${base}/api/sessions?demo=1`);
+    const demoData = await demoResponse.json();
+    assert(demoData.sessions.length >= 2, "demo mode should return synthetic sessions");
     socket = new WebSocket(`ws://127.0.0.1:${port}/api/stream`);
     socket.addEventListener("message", (event) => messages.push(JSON.parse(String(event.data))));
     await new Promise((resolve, reject) => {
