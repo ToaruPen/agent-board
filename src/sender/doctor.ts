@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { log } from "../shared/logger.js";
+import { isMainModule } from "../shared/main-module.js";
 import { loadConfig, senderHome } from "./config.js";
 import { SENDER_VERSION } from "./payload.js";
 import { spoolStats } from "./spool.js";
@@ -69,7 +70,7 @@ export function doctorReport(env: NodeJS.ProcessEnv = process.env): DoctorReport
   };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMainModule(import.meta.url, process.argv[1])) {
   const report = doctorReport();
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   if (!report.config_present) log("warn", "agent board config is missing");

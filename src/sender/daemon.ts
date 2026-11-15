@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { EventEnvelope } from "../shared/envelope.js";
 import { parseEnvelope } from "../shared/envelope.js";
 import { log } from "../shared/logger.js";
+import { isMainModule } from "../shared/main-module.js";
 import { isStateChanging } from "../shared/normalizer.js";
 import { PERF } from "../shared/perf.js";
 import { loadConfig, loadToken, type SenderConfig } from "./config.js";
@@ -360,7 +361,7 @@ async function main(): Promise<void> {
   process.on("SIGTERM", stop);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMainModule(import.meta.url, process.argv[1])) {
   void main().catch((error) => {
     log("error", "daemon failed", { error: String(error) });
     process.exitCode = 1;
