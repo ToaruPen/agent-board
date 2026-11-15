@@ -72,3 +72,6 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # The real Access issuer and audience live only in GitHub Secrets:
+          # wrangler.toml carries placeholders because this repo is public.
+          command: deploy --var ACCESS_ISSUER:${{ secrets.ACCESS_ISSUER }} --var ACCESS_AUD:${{ secrets.ACCESS_AUD }}
