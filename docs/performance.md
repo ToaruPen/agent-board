@@ -30,6 +30,12 @@ This project treats cost as a bounded systems problem. Every hot path has a nume
 | Read API page size | `readMaxLimit` | 100 |
 | MCP page size | `mcpMaxLimit` | 100 |
 | Recent events page size | `recentEventsMaxLimit` | 200 |
+| Dialogue command execution cap | `dialogueExecTimeoutMs` | 900,000 ms |
+| Dialogue command expiry | `dialogueExpiryMs` | 86,400,000 ms |
+| Dialogue held re-offer fallback | `dialogueHeldRetryMs` | 300,000 ms |
+| Dialogue message size | `dialogueMessageMaxChars` | 2,000 chars |
+| Dialogue result request size | `dialogueResultMaxBytes` | 65,536 bytes |
+| Dialogue messages kept per thread | `dialogueThreadCap` | 100 |
 
 ## Write rules
 
@@ -99,6 +105,12 @@ The honest summary is that coalescing bounds bursts and the ring bounds storage.
 ### Heartbeats
 
 One machine sends at most one heartbeat per 60 seconds. That is 60 requests per machine hour. The server writes a machine row at most once per 30 seconds, and a 60 second interval means the normal case writes once per heartbeat. A fleet of 4 machines sends at most 240 heartbeat requests per hour in total.
+
+### Dialogue
+
+Dialogue adds no requests of its own on the delivery path. Pending commands ride the existing heartbeat response, so an idle board with no commands costs exactly what heartbeats already cost. A command that runs produces at most three small result posts (running, then one terminal state), plus one Durable Object write per state change and one audit row per state change. A held command is re-offered only when the session state changes or after the 300 second fallback, so a busy session does not cause a retry loop. Message storage is bounded by the per thread cap of 100, and terminal state messages are pruned with the ended session retention.
+
+The real cost of a delivered command is not Cloudflare operations. It is one CLI resume turn on the target machine, billed to that machine's CLI account at whatever that turn consumes. That cost is the operator's reason for posting the message, and it is stated here plainly so nobody mistakes dialogue for a free channel.
 
 ## Measured proof
 

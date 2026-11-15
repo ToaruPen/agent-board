@@ -35,7 +35,7 @@ People run Claude Code and Codex sessions directly on several machines. No singl
 - Machine identity on the server comes from the ingest token. A machine field in a request body is never trusted.
 - Changes to any `AGENTS.md` file need human review. These files are a prompt injection surface in a public repo.
 - Real captured hook payloads are never used as fixtures. Fixtures are synthesized.
-- The board is an observability tool. It is not a control plane.
+- The board is an observability tool with one control surface: dialogue commands. They are store and forward, audit logged, and never interrupt a running turn.
 
 ## Scoped guidance
 

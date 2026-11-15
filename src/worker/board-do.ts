@@ -1,3 +1,4 @@
+import { type CommandResult, MUSE_THREAD_ID } from "../shared/dialogue.js";
 import { parseEnvelope } from "../shared/envelope.js";
 import { PERF } from "../shared/perf.js";
 import { DEMO_MACHINES, DEMO_SESSIONS } from "./demo.js";
@@ -23,6 +24,49 @@ function json(body: unknown, status = 200): Response {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+const DIALOGUE_ERROR_STATUS: Record<string, number> = {
+  "invalid dialogue body": 400,
+  "invalid transition": 409,
+  "message belongs to another machine": 403,
+  "message body is empty": 400,
+  "message not found": 404,
+  "message too long": 400,
+  "session not found": 404,
+};
+
+function dialogueError(caught: unknown): Response | null {
+  const message = caught instanceof Error ? caught.message : "";
+  const status = DIALOGUE_ERROR_STATUS[message];
+  return status ? json({ error: message }, status) : null;
+}
+
+async function dialogueBody(request: Request): Promise<Record<string, unknown>> {
+  const body: unknown = await request.json().catch(() => null);
+  if (!isRecord(body)) throw new Error("invalid dialogue body");
+  return body;
+}
+
+function text(value: unknown): string {
+  if (typeof value !== "string") throw new Error("invalid dialogue body");
+  return value;
+}
+
+function commandResult(body: Record<string, unknown>): CommandResult {
+  const status = body.status;
+  if (
+    status !== "answered" &&
+    status !== "failed" &&
+    status !== "held_busy" &&
+    status !== "running"
+  ) {
+    throw new Error("invalid dialogue body");
+  }
+  const result: CommandResult = { status };
+  if (typeof body.reply === "string") result.reply = body.reply;
+  if (typeof body.reason === "string") result.reason = body.reason;
+  return result;
 }
 
 function bounded(value: string | null, fallback: number, max: number): number {
@@ -62,9 +106,75 @@ export class BoardDurableObject {
     }
   }
 
+  private broadcastThread(threadId: string): void {
+    const payload = JSON.stringify({ thread_id: threadId, type: "thread" });
+    for (const socket of this.state.getWebSockets()) {
+      try {
+        socket.send(payload);
+        this.backend.metrics.broadcasts += 1;
+      } catch {
+        try {
+          socket.close(1011, "send failed");
+        } catch {
+          // The socket is already gone. Other sockets still receive the notice.
+        }
+      }
+    }
+  }
+
+  private async dialogue(request: Request, url: URL): Promise<Response | null> {
+    const threadMatch = url.pathname.match(/^\/internal\/sessions\/([^/]+)\/messages$/);
+    const threadId = threadMatch
+      ? decodeURIComponent(threadMatch[1] as string)
+      : url.pathname === "/internal/muse/messages"
+        ? MUSE_THREAD_ID
+        : null;
+    if (threadId !== null && request.method === "POST") {
+      const body = await dialogueBody(request);
+      const message = this.service.createMessage(threadId, text(body.body));
+      this.broadcastThread(threadId);
+      return json({ message }, 201);
+    }
+    if (threadId !== null && request.method === "GET") {
+      const limit = bounded(
+        url.searchParams.get("limit"),
+        PERF.dialogueThreadCap,
+        PERF.dialogueThreadCap,
+      );
+      return json({ messages: this.service.listThread(threadId, limit) });
+    }
+    if (url.pathname === "/internal/muse/inbox" && request.method === "GET") {
+      return json({ messages: this.service.museInbox() });
+    }
+    if (url.pathname === "/internal/muse/reply" && request.method === "POST") {
+      const body = await dialogueBody(request);
+      const outcome = this.service.museReply(text(body.message_id), text(body.body));
+      this.broadcastThread(MUSE_THREAD_ID);
+      return json(outcome);
+    }
+    const resultMatch = url.pathname.match(/^\/internal\/commands\/([^/]+)\/result$/);
+    if (resultMatch && request.method === "POST") {
+      const body = await dialogueBody(request);
+      const outcome = this.service.reportResult(
+        text(body.machine_id),
+        decodeURIComponent(resultMatch[1] as string),
+        commandResult(body),
+      );
+      this.broadcastThread(outcome.message.thread_id);
+      return json(outcome);
+    }
+    return null;
+  }
+
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     try {
+      const dialogue = await this.dialogue(request, url).catch((caught: unknown) => {
+        const mapped = dialogueError(caught);
+        if (mapped) return mapped;
+        throw caught;
+      });
+      if (dialogue) return dialogue;
       if (url.pathname === "/internal/stream") {
         if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
           return json({ error: "websocket upgrade required" }, 426);
@@ -113,6 +223,7 @@ export class BoardDurableObject {
           typeof body.sender_version === "string" ? body.sender_version : "unknown",
           typeof body.spool_depth === "number" ? Math.max(0, Math.floor(body.spool_depth)) : 0,
         );
+        for (const command of outcome.commands) this.broadcastThread(command.session_id);
         return json(outcome);
       }
       if (url.pathname === "/internal/sessions" && request.method === "GET") {

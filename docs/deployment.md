@@ -31,6 +31,25 @@ For each machine:
 9. Run `just doctor` from the repo checkout on that machine. Confirm config present, token present, spool depth sane, and a last successful post after one real session.
 10. Open one real session and confirm the board shows it within seconds. Trigger one permission prompt and confirm the attention flag appears.
 
+## Dialogue
+
+The board is also a control surface. The operator can post a message to any session thread, or to a dedicated thread addressed to the operator's own assistant. This section is the operator contract for that surface.
+
+How delivery works:
+
+- A message posted in the board UI is stored in the Board Durable Object with the status `queued`. Its full lifecycle is `queued`, `delivered`, `running`, then `answered`, `held_busy`, `failed`, or `expired`. A command expires 24 hours after it was posted.
+- No new channel exists. Pending commands for a machine ride the response of that machine's existing 60 second heartbeat. The daemon executes a command only when the session is safe: its lifecycle has ended or failed, or its activity is idle. A session in the middle of a turn is never interrupted. The daemon reports `held_busy` and the Worker offers the command again on a later heartbeat, when the session state changes or after a fallback delay, until the command expires.
+- Execution is one resume turn on the machine. Claude Code runs `claude --resume <session_id> -p <message>`. Codex runs `codex exec --skip-git-repo-check resume <session_id> <message>` with stdin closed. A refusal that names a writer lock (the Codex app holding its own thread) is reported as `held_busy` with the reason, not as a failure. Execution is capped at 15 minutes. The final assistant text returns as the thread reply, truncated to the same limit as other stored messages.
+- Every state change writes an audit row in the Durable Object with the actor, the action, and the time. There is no silent path from a posted message to a running command.
+- One command per session is in flight at a time.
+
+Operator steps for dialogue:
+
+1. Per machine opt in lives in `~/.agent-board/config.json` as `dialogue_enabled`. It defaults to `true` when absent. Set it to `false` on a machine that must never execute board commands; the daemon then refuses every command with the reason `dialogue_disabled`. The doctor output reports the flag.
+2. The daemon spawns the CLIs by name (`claude`, `codex`). A daemon running under systemd or launchd often has a PATH that lacks them. Set `AGENT_BOARD_CLAUDE_BIN` and `AGENT_BOARD_CODEX_BIN` to absolute paths in the daemon's service environment when needed.
+3. The assistant thread uses its own token, separate from the machine tokens and the MCP token. Create one token for the assistant. Put its SHA 256 hash in the Worker secret named `MUSE_TOKEN_SHA256`. Put the plain token only in the assistant's own token store. The assistant polls `GET /api/muse/inbox` for unanswered messages and answers with `POST /api/muse/reply`.
+4. Add Cloudflare Access bypass applications for the token authenticated dialogue paths, the same shape as the ingest, heartbeat, and MCP bypass applications: one for `/api/muse/inbox`, one for `/api/muse/reply`, and one covering `/api/commands/*` (the per command result endpoint). Without them, Access redirects the token calls before they reach the Worker. The board UI paths (`/api/sessions/:id/messages`, `/api/muse/messages`) stay behind the normal Access application; they are not bypassed.
+
 ## Windows probe
 
 The Windows Codex app may not fire file based hooks. Probe before relying on hook coverage there.

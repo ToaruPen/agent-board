@@ -9,12 +9,13 @@ Agent Board is a live board for coding agent sessions. It collects session event
 - Pushes changes to an open board page over WebSocket. A page shows seconds since the last event for each session.
 - Shows subagents as a count on the parent session card, with a drill in list.
 - Answers agent queries through read only MCP tools named `list_sessions`, `get_session`, and `get_recent_events`.
+- Carries operator messages to sessions, store and forward. A message posted on the board rides the machine daemon's next heartbeat, runs as one resume turn only when the session is idle or ended, and the reply lands back in the session thread. Every delivery state change is audit logged in the Durable Object. A separate thread addresses the operator's own assistant, served by a token authenticated inbox API.
 - Keeps working after a network outage. The sender spools events on disk and the daemon replays them. The server deduplicates by event id.
 
 ## What it does not do
 
-- It does not start, stop, or control sessions.
-- It does not assign tasks.
+- It does not start or stop sessions, and it never interrupts a running turn. Dialogue delivery waits until a session is idle or ended.
+- It does not assign tasks on its own. It only carries messages the operator writes.
 - It does not read or upload transcripts.
 - It does not guarantee capture. Hooks are best effort and a user can disable them.
 - It is not a trace or cost analytics platform.

@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, renameSync, rmSync, watch, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { CommandResult, PendingCommand } from "../shared/dialogue.js";
 import type { EventEnvelope } from "../shared/envelope.js";
 import { parseEnvelope } from "../shared/envelope.js";
 import { log } from "../shared/logger.js";
@@ -7,6 +8,7 @@ import { isMainModule } from "../shared/main-module.js";
 import { isStateChanging } from "../shared/normalizer.js";
 import { PERF } from "../shared/perf.js";
 import { loadConfig, loadToken, type SenderConfig } from "./config.js";
+import { executeCommand, SessionActivityTracker } from "./dialogue.js";
 import { SENDER_VERSION } from "./payload.js";
 import {
   appendDeadLetter,
@@ -126,6 +128,42 @@ function recordSuccess(config: SenderConfig, count: number): void {
   );
 }
 
+function trackerPath(config: SenderConfig): string {
+  return join(config.home, "session-activity.json");
+}
+
+function loadTracker(config: SenderConfig): SessionActivityTracker {
+  const path = trackerPath(config);
+  if (!existsSync(path)) return new SessionActivityTracker();
+  try {
+    return SessionActivityTracker.fromJSON(JSON.parse(readFileSync(path, "utf8")));
+  } catch (error) {
+    log("warn", "session activity file unreadable", { error: String(error) });
+    return new SessionActivityTracker();
+  }
+}
+
+function parseCommands(value: unknown): PendingCommand[] {
+  if (typeof value !== "object" || value === null) return [];
+  const raw = (value as Record<string, unknown>).commands;
+  if (!Array.isArray(raw)) return [];
+  const commands: PendingCommand[] = [];
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null) continue;
+    const { body, cli, cwd, message_id, session_id } = item as Record<string, unknown>;
+    if (
+      typeof body === "string" &&
+      (cli === "claude-code" || cli === "codex") &&
+      typeof cwd === "string" &&
+      typeof message_id === "string" &&
+      typeof session_id === "string"
+    ) {
+      commands.push({ body, cli, cwd, message_id, session_id });
+    }
+  }
+  return commands;
+}
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export class DaemonRunner {
@@ -135,6 +173,9 @@ export class DaemonRunner {
   private pending: EventEnvelope[] = [];
   private pendingSince = 0;
   private readonly activeClaims = new Set<string>();
+  private readonly inFlightSessions = new Set<string>();
+  private readonly tracker: SessionActivityTracker;
+  private trackerDirty = false;
   readonly stats: FlushStats = { batches: 0, deadLettered: 0, eventsSent: 0, requests: 0 };
 
   constructor(config: SenderConfig, options: DaemonOptions = {}) {
@@ -144,6 +185,7 @@ export class DaemonRunner {
     this.retryBaseMs = options.retryBaseMs ?? PERF.retryBaseMs;
     this.retryMaxMs = options.retryMaxMs ?? PERF.retryMaxMs;
     this.coalesceMs = options.coalesceMs ?? PERF.toolCoalesceMs;
+    this.tracker = loadTracker(config);
   }
 
   private readonly retryBaseMs: number;
@@ -155,7 +197,9 @@ export class DaemonRunner {
     const poison: string[] = [];
     for (const line of lines) {
       try {
-        events.push(parseEnvelope(JSON.parse(line)));
+        const envelope = parseEnvelope(JSON.parse(line));
+        if (this.tracker.observe(envelope)) this.trackerDirty = true;
+        events.push(envelope);
       } catch {
         poison.push(line);
       }
@@ -278,6 +322,17 @@ export class DaemonRunner {
       await this.send(merged);
     }
     this.resolveClaims();
+    this.persistTracker();
+  }
+
+  private persistTracker(): void {
+    if (!this.trackerDirty) return;
+    try {
+      writeFileSync(trackerPath(this.config), JSON.stringify(this.tracker));
+      this.trackerDirty = false;
+    } catch (error) {
+      log("warn", "session activity write failed", { error: String(error) });
+    }
   }
 
   async flushAll(): Promise<FlushStats> {
@@ -291,10 +346,10 @@ export class DaemonRunner {
     return this.stats;
   }
 
-  async heartbeat(): Promise<boolean> {
-    const token = loadToken(this.config);
-    const depth = spoolStats(this.config.spoolDir).lines + this.pending.length;
+  async heartbeat(): Promise<{ commands: PendingCommand[]; ok: boolean }> {
     try {
+      const token = loadToken(this.config);
+      const depth = spoolStats(this.config.spoolDir).lines + this.pending.length;
       const response = await this.fetchFn(`${this.config.endpoint}/api/heartbeat`, {
         body: JSON.stringify({
           sender_version: SENDER_VERSION,
@@ -303,11 +358,66 @@ export class DaemonRunner {
         headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
         method: "POST",
       });
-      return response.ok;
+      if (!response.ok) return { commands: [], ok: false };
+      const body: unknown = await response.json().catch(() => null);
+      return { commands: parseCommands(body), ok: true };
     } catch (error) {
       log("warn", "heartbeat failed", { error: String(error) });
-      return false;
+      return { commands: [], ok: false };
     }
+  }
+
+  async reportResult(messageId: string, result: CommandResult): Promise<void> {
+    try {
+      const token = loadToken(this.config);
+      const response = await this.fetchFn(
+        `${this.config.endpoint}/api/commands/${encodeURIComponent(messageId)}/result`,
+        {
+          body: JSON.stringify(result),
+          headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+          method: "POST",
+        },
+      );
+      if (!response.ok) {
+        log("warn", "command result rejected", { message_id: messageId, status: response.status });
+      }
+    } catch (error) {
+      log("warn", "command result failed", { error: String(error), message_id: messageId });
+    }
+  }
+
+  async processCommands(commands: PendingCommand[]): Promise<void> {
+    for (const command of commands) {
+      if (this.inFlightSessions.has(command.session_id)) continue;
+      this.inFlightSessions.add(command.session_id);
+      try {
+        await this.runCommand(command);
+      } catch (error) {
+        log("warn", "command execution failed", { error: String(error) });
+        await this.reportResult(command.message_id, { reason: "daemon_error", status: "failed" });
+      } finally {
+        this.inFlightSessions.delete(command.session_id);
+      }
+    }
+  }
+
+  private async runCommand(command: PendingCommand): Promise<void> {
+    if (!this.config.dialogueEnabled) {
+      await this.reportResult(command.message_id, {
+        reason: "dialogue_disabled",
+        status: "failed",
+      });
+      return;
+    }
+    // Unknown sessions proceed: the Worker offered from its own state, and the
+    // local tracker only vetoes when it positively knows a turn is running.
+    if (this.tracker.isSafe(command.session_id) === false) {
+      await this.reportResult(command.message_id, { reason: "session_busy", status: "held_busy" });
+      return;
+    }
+    await this.reportResult(command.message_id, { status: "running" });
+    const outcome = await executeCommand(command);
+    await this.reportResult(command.message_id, outcome);
   }
 }
 
@@ -332,7 +442,8 @@ async function main(): Promise<void> {
   });
   if (once) {
     await runner.flushAll();
-    await runner.heartbeat();
+    const { commands } = await runner.heartbeat();
+    await runner.processCommands(commands);
     return;
   }
   const pollMs: number = PERF.daemonPollMs;
@@ -346,11 +457,15 @@ async function main(): Promise<void> {
       running = false;
     }
   };
+  const beat = async () => {
+    const { commands } = await runner.heartbeat();
+    if (commands.length) void runner.processCommands(commands);
+  };
   await tick();
-  await runner.heartbeat();
+  await beat();
   const watcher = existsSync(config.spoolDir) ? watch(config.spoolDir, () => void tick()) : null;
   const poll = setInterval(() => void tick(), pollMs);
-  const heartbeat = setInterval(() => void runner.heartbeat(), PERF.heartbeatIntervalMs);
+  const heartbeat = setInterval(() => void beat(), PERF.heartbeatIntervalMs);
   const stop = () => {
     watcher?.close();
     clearInterval(poll);

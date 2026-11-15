@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { EVENT_WINDOW_PER_SESSION, MAX_INGEST_EVENTS } from "../src/shared/limits.js";
+import {
+  EVENT_WINDOW_PER_SESSION,
+  MAX_INGEST_BYTES,
+  MAX_INGEST_EVENTS,
+} from "../src/shared/limits.js";
 import { setLogLevel } from "../src/shared/logger.js";
 import { PERF } from "../src/shared/perf.js";
 import { SENDER_PERF } from "../src/sender/config.js";
@@ -36,4 +40,12 @@ test("performance caps are bounded and ordered", () => {
   assert.ok(PERF.eventsPerSessionCap <= 200);
   assert.ok(PERF.mcpMaxLimit <= PERF.readMaxLimit);
   assert.ok(PERF.recentEventsMaxLimit <= 200);
+});
+
+test("dialogue caps are bounded", () => {
+  assert.ok(PERF.dialogueExecTimeoutMs <= 900_000);
+  assert.equal(PERF.dialogueExpiryMs, 86_400_000);
+  assert.ok(PERF.dialogueMessageMaxChars <= 10_000);
+  assert.ok(PERF.dialogueThreadCap <= 1_000);
+  assert.ok(PERF.dialogueResultMaxBytes <= MAX_INGEST_BYTES);
 });

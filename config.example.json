@@ -1,1 +1,5 @@
-{ "endpoint": "https://REPLACE_ME.example.com", "machine_id": "REPLACE_ME" }
+{
+  "dialogue_enabled": true,
+  "endpoint": "https://REPLACE_ME.example.com",
+  "machine_id": "REPLACE_ME"
+}

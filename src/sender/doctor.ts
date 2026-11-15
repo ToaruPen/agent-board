@@ -12,6 +12,7 @@ export interface DoctorReport {
   codex_hook_present: boolean | null;
   config_location: string;
   config_present: boolean;
+  dialogue_enabled: boolean | null;
   last_successful_post_at: string | null;
   sender_version: string;
   spool_bytes: number;
@@ -33,11 +34,13 @@ export function doctorReport(env: NodeJS.ProcessEnv = process.env): DoctorReport
   const home = senderHome(env);
   const userHome = env.HOME ?? homedir();
   let configPresent = false;
+  let dialogueEnabled: boolean | null = null;
   let spoolDir = join(home, "spool");
   let statePath = join(home, "state.json");
   try {
     const config = loadConfig(env);
     configPresent = true;
+    dialogueEnabled = config.dialogueEnabled;
     spoolDir = config.spoolDir;
     statePath = config.statePath;
   } catch {
@@ -61,6 +64,7 @@ export function doctorReport(env: NodeJS.ProcessEnv = process.env): DoctorReport
     codex_hook_present: hookPresent(join(userHome, ".codex", "hooks.json")),
     config_location: join(home, "config.json"),
     config_present: configPresent,
+    dialogue_enabled: dialogueEnabled,
     last_successful_post_at: lastSuccess,
     sender_version: SENDER_VERSION,
     spool_bytes: stats.bytes,

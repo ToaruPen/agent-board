@@ -5,6 +5,7 @@ export interface AuthEnv {
   LOCAL_DEV_AUTH_BYPASS?: string;
   MACHINE_TOKENS_JSON?: string;
   MCP_TOKEN_SHA256?: string;
+  MUSE_TOKEN_SHA256?: string;
 }
 
 interface JwtHeader {
@@ -72,6 +73,14 @@ export async function mcpAuthorized(request: Request, env: AuthEnv): Promise<boo
   if (!header.startsWith("Bearer ") || !env.MCP_TOKEN_SHA256) return false;
   const hash = await sha256Hex(header.slice("Bearer ".length));
   return timingSafeEqual(hash, env.MCP_TOKEN_SHA256.toLowerCase());
+}
+
+export async function museAuthorized(request: Request, env: AuthEnv): Promise<boolean> {
+  if (localBypass(env) && env.MUSE_TOKEN_SHA256 === undefined) return true;
+  const header = request.headers.get("authorization") ?? "";
+  if (!header.startsWith("Bearer ") || !env.MUSE_TOKEN_SHA256) return false;
+  const hash = await sha256Hex(header.slice("Bearer ".length));
+  return timingSafeEqual(hash, env.MUSE_TOKEN_SHA256.toLowerCase());
 }
 
 function base64UrlJson<T>(value: string): T {

@@ -1,5 +1,16 @@
+import {
+  type AuditEntry,
+  type CommandResult,
+  type DialogueMessage,
+  type DialogueStatus,
+  MUSE_THREAD_ID,
+  type PendingCommand,
+  TERMINAL_STATUSES,
+} from "../shared/dialogue.js";
 import type { MachineRow, SessionRow, StoredEvent } from "../shared/envelope.js";
 import { parseEnvelope } from "../shared/envelope.js";
+import { newMessageId } from "../shared/ids.js";
+import { MESSAGE_LIMIT, truncate } from "../shared/limits.js";
 import { applyEvent, NORMALIZER_VERSION } from "../shared/normalizer.js";
 import { PERF } from "../shared/perf.js";
 
@@ -13,25 +24,45 @@ export interface StoreMetrics {
   sessionWrites: number;
 }
 
+export interface PruneCounts {
+  events: number;
+  messages: number;
+  sessions: number;
+}
+
 export interface BoardBackend {
   readonly metrics: StoreMetrics;
+  addAudit(entry: Omit<AuditEntry, "audit_id">): void;
   addEvent(event: StoredEvent): void;
+  addMessage(message: DialogueMessage): void;
   countEvents(): number;
+  countMessages(threadId: string): number;
   countSessions(): number;
+  deleteMessages(messageIds: string[]): void;
   deleteOldestEvents(keep: number, sessionId?: string): number;
   deleteOldestSessions(keep: number): number;
   getMachine(machineId: string): MachineRow | null;
+  getMessage(messageId: string): DialogueMessage | null;
   getSession(sessionId: string): SessionRow | null;
   hasEvent(eventId: string): boolean;
+  listAudit(messageId: string): AuditEntry[];
   listEvents(sessionId: string, limit: number): StoredEvent[];
   listMachines(): MachineRow[];
+  listMessages(threadId: string, limit: number): DialogueMessage[];
+  // Oldest first. A null machine selects the Muse thread, the only thread without a machine.
+  listMessagesByStatus(machineId: string | null, statuses: DialogueStatus[]): DialogueMessage[];
   listSessions(machineId: string | undefined, limit: number, offset: number): SessionRow[];
   listSessionsSince(sequence: number): SessionRow[];
   nextSequence(): number;
-  prune(eventCutoff: string, endedCutoff: string): { events: number; sessions: number };
+  prune(eventCutoff: string, endedCutoff: string): PruneCounts;
   putMachine(machine: MachineRow): void;
+  putMessage(message: DialogueMessage): void;
   putSession(session: SessionRow): void;
   sequence(): number;
+}
+
+function isTerminal(status: DialogueStatus): boolean {
+  return TERMINAL_STATUSES.includes(status);
 }
 
 function clone<T>(value: T): T {
@@ -46,14 +77,70 @@ export class MemoryBoardBackend implements BoardBackend {
     ingestRequests: 0,
     sessionWrites: 0,
   };
+  private readonly audit: AuditEntry[] = [];
   private currentSequence = 0;
   private readonly events: StoredEvent[] = [];
   private readonly machines = new Map<string, MachineRow>();
+  private readonly messages = new Map<string, DialogueMessage>();
+  private nextAuditId = 1;
   private readonly sessions = new Map<string, SessionRow>();
+
+  addAudit(entry: Omit<AuditEntry, "audit_id">): void {
+    this.audit.push({ ...entry, audit_id: this.nextAuditId });
+    this.nextAuditId += 1;
+  }
 
   addEvent(event: StoredEvent): void {
     this.events.push(clone(event));
     this.metrics.eventWrites += 1;
+  }
+
+  addMessage(message: DialogueMessage): void {
+    if (this.messages.has(message.message_id)) throw new Error("message already exists");
+    this.messages.set(message.message_id, clone(message));
+  }
+
+  countMessages(threadId: string): number {
+    return this.threadMessages(threadId).length;
+  }
+
+  deleteMessages(messageIds: string[]): void {
+    const ids = new Set(messageIds);
+    for (const id of ids) this.messages.delete(id);
+    const kept = this.audit.filter((entry) => !ids.has(entry.message_id));
+    this.audit.splice(0, this.audit.length, ...kept);
+  }
+
+  getMessage(messageId: string): DialogueMessage | null {
+    const row = this.messages.get(messageId);
+    return row ? clone(row) : null;
+  }
+
+  listAudit(messageId: string): AuditEntry[] {
+    return clone(this.audit.filter((entry) => entry.message_id === messageId));
+  }
+
+  listMessages(threadId: string, limit: number): DialogueMessage[] {
+    return clone(this.threadMessages(threadId).slice(-limit));
+  }
+
+  listMessagesByStatus(machineId: string | null, statuses: DialogueStatus[]): DialogueMessage[] {
+    return clone(
+      this.ordered().filter((row) => row.machine_id === machineId && statuses.includes(row.status)),
+    );
+  }
+
+  putMessage(message: DialogueMessage): void {
+    this.messages.set(message.message_id, clone(message));
+  }
+
+  // Array.sort is stable, so equal timestamps keep insertion order like the SQL rowid tie break.
+  private ordered(): DialogueMessage[] {
+    return [...this.messages.values()].sort((a, b) => a.created_at.localeCompare(b.created_at));
+  }
+
+  private threadMessages(threadId: string): DialogueMessage[] {
+    return this.ordered().filter((row) => row.thread_id === threadId);
   }
 
   countEvents(): number {
@@ -137,7 +224,7 @@ export class MemoryBoardBackend implements BoardBackend {
     return this.currentSequence;
   }
 
-  prune(eventCutoff: string, endedCutoff: string): { events: number; sessions: number } {
+  prune(eventCutoff: string, endedCutoff: string): PruneCounts {
     const beforeEvents = this.events.length;
     const keptEvents = this.events.filter((event) => event.received_at >= eventCutoff);
     this.events.splice(0, this.events.length, ...keptEvents);
@@ -148,7 +235,11 @@ export class MemoryBoardBackend implements BoardBackend {
         sessions += 1;
       }
     }
-    return { events: beforeEvents - keptEvents.length, sessions };
+    const staleMessages = [...this.messages.values()]
+      .filter((row) => isTerminal(row.status) && row.updated_at < endedCutoff)
+      .map((row) => row.message_id);
+    this.deleteMessages(staleMessages);
+    return { events: beforeEvents - keptEvents.length, messages: staleMessages.length, sessions };
   }
 
   putMachine(machine: MachineRow): void {
@@ -189,6 +280,11 @@ interface KeyValueRow {
   value: string;
 }
 
+interface AuditRow {
+  audit_id: number;
+  row_json: string;
+}
+
 export class SqlBoardBackend implements BoardBackend {
   readonly metrics: StoreMetrics = {
     broadcasts: 0,
@@ -216,6 +312,111 @@ export class SqlBoardBackend implements BoardBackend {
     this.sql.exec("CREATE INDEX IF NOT EXISTS events_received ON events (received_at)");
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS machines (machine_id TEXT PRIMARY KEY, row_json TEXT NOT NULL)",
+    );
+    this.sql.exec(
+      "CREATE TABLE IF NOT EXISTS messages (message_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, session_id TEXT, machine_id TEXT, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_json TEXT NOT NULL)",
+    );
+    this.sql.exec("CREATE INDEX IF NOT EXISTS messages_thread ON messages (thread_id, created_at)");
+    this.sql.exec(
+      "CREATE INDEX IF NOT EXISTS messages_machine_status ON messages (machine_id, status)",
+    );
+    this.sql.exec(
+      "CREATE TABLE IF NOT EXISTS audit (audit_id INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT NOT NULL, at TEXT NOT NULL, row_json TEXT NOT NULL)",
+    );
+    this.sql.exec("CREATE INDEX IF NOT EXISTS audit_message ON audit (message_id)");
+  }
+
+  addAudit(entry: Omit<AuditEntry, "audit_id">): void {
+    this.sql.exec(
+      "INSERT INTO audit (message_id, at, row_json) VALUES (?, ?, ?)",
+      entry.message_id,
+      entry.at,
+      JSON.stringify(entry),
+    );
+  }
+
+  addMessage(message: DialogueMessage): void {
+    this.sql.exec(
+      "INSERT INTO messages (message_id, thread_id, session_id, machine_id, status, created_at, updated_at, row_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      message.message_id,
+      message.thread_id,
+      message.session_id,
+      message.machine_id,
+      message.status,
+      message.created_at,
+      message.updated_at,
+      JSON.stringify(message),
+    );
+  }
+
+  countMessages(threadId: string): number {
+    return (
+      this.sql
+        .exec<CountRow>("SELECT COUNT(*) AS count FROM messages WHERE thread_id = ?", threadId)
+        .toArray()[0]?.count ?? 0
+    );
+  }
+
+  deleteMessages(messageIds: string[]): void {
+    for (const messageId of messageIds) {
+      this.sql.exec("DELETE FROM audit WHERE message_id = ?", messageId);
+      this.sql.exec("DELETE FROM messages WHERE message_id = ?", messageId);
+    }
+  }
+
+  getMessage(messageId: string): DialogueMessage | null {
+    const row = this.sql
+      .exec<KeyValueRow>("SELECT row_json AS value FROM messages WHERE message_id = ?", messageId)
+      .toArray()[0];
+    return row ? (JSON.parse(row.value) as DialogueMessage) : null;
+  }
+
+  listAudit(messageId: string): AuditEntry[] {
+    return this.sql
+      .exec<AuditRow>(
+        "SELECT audit_id, row_json FROM audit WHERE message_id = ? ORDER BY audit_id ASC",
+        messageId,
+      )
+      .toArray()
+      .map((row) => ({ ...(JSON.parse(row.row_json) as AuditEntry), audit_id: row.audit_id }));
+  }
+
+  listMessages(threadId: string, limit: number): DialogueMessage[] {
+    return this.sql
+      .exec<KeyValueRow>(
+        "SELECT row_json AS value FROM messages WHERE thread_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?",
+        threadId,
+        limit,
+      )
+      .toArray()
+      .reverse()
+      .map((row) => JSON.parse(row.value) as DialogueMessage);
+  }
+
+  listMessagesByStatus(machineId: string | null, statuses: DialogueStatus[]): DialogueMessage[] {
+    if (!statuses.length) return [];
+    const placeholders = statuses.map(() => "?").join(", ");
+    return this.sql
+      .exec<KeyValueRow>(
+        `SELECT row_json AS value FROM messages WHERE machine_id IS ? AND status IN (${placeholders}) ORDER BY created_at ASC, rowid ASC`,
+        machineId,
+        ...statuses,
+      )
+      .toArray()
+      .map((row) => JSON.parse(row.value) as DialogueMessage);
+  }
+
+  putMessage(message: DialogueMessage): void {
+    this.sql.exec(
+      "INSERT INTO messages (message_id, thread_id, session_id, machine_id, status, created_at, updated_at, row_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(message_id) DO UPDATE SET thread_id = excluded.thread_id, session_id = excluded.session_id, machine_id = excluded.machine_id, status = excluded.status, created_at = excluded.created_at, updated_at = excluded.updated_at, row_json = excluded.row_json",
+      message.message_id,
+      message.thread_id,
+      message.session_id,
+      message.machine_id,
+      message.status,
+      message.created_at,
+      message.updated_at,
+      JSON.stringify(message),
     );
   }
 
@@ -355,7 +556,7 @@ export class SqlBoardBackend implements BoardBackend {
     return next;
   }
 
-  prune(eventCutoff: string, endedCutoff: string): { events: number; sessions: number } {
+  prune(eventCutoff: string, endedCutoff: string): PruneCounts {
     const beforeEvents = this.countEvents();
     this.sql.exec("DELETE FROM events WHERE received_at < ?", eventCutoff);
     const events = beforeEvents - this.countEvents();
@@ -364,7 +565,27 @@ export class SqlBoardBackend implements BoardBackend {
       "DELETE FROM sessions WHERE lifecycle != 'active' AND last_event_at < ?",
       endedCutoff,
     );
-    return { events, sessions: beforeSessions - this.countSessions() };
+    const terminal = TERMINAL_STATUSES.map(() => "?").join(", ");
+    const stale = `SELECT message_id FROM messages WHERE status IN (${terminal}) AND updated_at < ?`;
+    const messages =
+      this.sql
+        .exec<CountRow>(
+          `SELECT COUNT(*) AS count FROM (${stale})`,
+          ...TERMINAL_STATUSES,
+          endedCutoff,
+        )
+        .toArray()[0]?.count ?? 0;
+    this.sql.exec(
+      `DELETE FROM audit WHERE message_id IN (${stale})`,
+      ...TERMINAL_STATUSES,
+      endedCutoff,
+    );
+    this.sql.exec(
+      `DELETE FROM messages WHERE message_id IN (${stale})`,
+      ...TERMINAL_STATUSES,
+      endedCutoff,
+    );
+    return { events, messages, sessions: beforeSessions - this.countSessions() };
   }
 
   putMachine(machine: MachineRow): void {
@@ -406,6 +627,25 @@ export interface IngestResult {
   accepted: number;
   changed: SessionRow[];
   duplicates: number;
+}
+
+export interface MessageOutcome {
+  message: DialogueMessage;
+  replyMessage: DialogueMessage | null;
+}
+
+const REASON_LIMIT = 200;
+const RECLAIM_GRACE_MS = 60_000;
+
+function plusMs(iso: string, ms: number): string {
+  return new Date(Date.parse(iso) + ms).toISOString();
+}
+
+function validBody(body: string): string {
+  const trimmed = body.trim();
+  if (!trimmed) throw new Error("message body is empty");
+  if (trimmed.length > PERF.dialogueMessageMaxChars) throw new Error("message too long");
+  return trimmed;
 }
 
 export class BoardService {
@@ -491,13 +731,14 @@ export class BoardService {
     senderVersion: string,
     spoolDepth: number,
     receivedAt = new Date().toISOString(),
-  ): { throttled: boolean } {
+  ): { commands: PendingCommand[]; throttled: boolean } {
+    const commands = this.offerCommands(machineId, receivedAt);
     const current = this.backend.getMachine(machineId);
     if (
       current &&
       Date.parse(receivedAt) - Date.parse(current.last_heartbeat_at) < PERF.heartbeatWriteThrottleMs
     ) {
-      return { throttled: true };
+      return { commands, throttled: true };
     }
     this.backend.putMachine({
       last_heartbeat_at: receivedAt,
@@ -505,7 +746,228 @@ export class BoardService {
       sender_version: senderVersion,
       spool_depth: spoolDepth,
     });
-    return { throttled: false };
+    return { commands, throttled: false };
+  }
+
+  private audit(
+    messageId: string,
+    actor: string,
+    action: string,
+    at: string,
+    detail: string | null = null,
+  ): void {
+    this.backend.addAudit({ action, actor, at, detail, message_id: messageId });
+  }
+
+  private transition(
+    message: DialogueMessage,
+    status: DialogueStatus,
+    actor: string,
+    nowIso: string,
+    changes: Partial<DialogueMessage> = {},
+    detail: string | null = null,
+    action: string = status,
+  ): DialogueMessage {
+    const next: DialogueMessage = { ...message, ...changes, status, updated_at: nowIso };
+    this.backend.putMessage(next);
+    this.audit(next.message_id, actor, action, nowIso, detail);
+    return next;
+  }
+
+  private addReply(
+    original: DialogueMessage,
+    author: DialogueMessage["author"],
+    body: string,
+    nowIso: string,
+  ): DialogueMessage {
+    const reply: DialogueMessage = {
+      author,
+      body: truncate(body, MESSAGE_LIMIT),
+      created_at: nowIso,
+      expires_at: original.expires_at,
+      machine_id: original.machine_id,
+      message_id: newMessageId(),
+      reason: null,
+      reply_to: original.message_id,
+      session_id: original.session_id,
+      status: "answered",
+      thread_id: original.thread_id,
+      updated_at: nowIso,
+    };
+    this.backend.addMessage(reply);
+    return reply;
+  }
+
+  private enforceThreadCap(threadId: string): void {
+    const count = this.backend.countMessages(threadId);
+    const excess = count - PERF.dialogueThreadCap;
+    if (excess <= 0) return;
+    const victims = this.backend
+      .listMessages(threadId, count)
+      .filter((message) => isTerminal(message.status))
+      .slice(0, excess)
+      .map((message) => message.message_id);
+    if (victims.length) this.backend.deleteMessages(victims);
+  }
+
+  createMessage(
+    threadId: string,
+    body: string,
+    nowIso = new Date().toISOString(),
+  ): DialogueMessage {
+    const text = validBody(body);
+    let session: SessionRow | null = null;
+    if (threadId !== MUSE_THREAD_ID) {
+      session = this.backend.getSession(threadId);
+      if (!session) throw new Error("session not found");
+    }
+    const message: DialogueMessage = {
+      author: "pen",
+      body: text,
+      created_at: nowIso,
+      expires_at: plusMs(nowIso, PERF.dialogueExpiryMs),
+      machine_id: session?.machine_id ?? null,
+      message_id: newMessageId(),
+      reason: null,
+      reply_to: null,
+      session_id: session?.session_id ?? null,
+      status: "queued",
+      thread_id: threadId,
+      updated_at: nowIso,
+    };
+    this.backend.addMessage(message);
+    this.audit(message.message_id, "pen", "created", nowIso);
+    this.enforceThreadCap(threadId);
+    return message;
+  }
+
+  listThread(threadId: string, limit: number): DialogueMessage[] {
+    return this.backend.listMessages(
+      threadId,
+      Math.max(1, Math.min(PERF.dialogueThreadCap, Math.floor(limit))),
+    );
+  }
+
+  expireMessages(machineId: string | null, nowIso = new Date().toISOString()): DialogueMessage[] {
+    const now = Date.parse(nowIso);
+    return this.backend
+      .listMessagesByStatus(machineId, ["queued", "held_busy"])
+      .filter((message) => Date.parse(message.expires_at) <= now)
+      .map((message) => this.transition(message, "expired", "worker", nowIso));
+  }
+
+  offerCommands(machineId: string, nowIso = new Date().toISOString()): PendingCommand[] {
+    this.expireMessages(machineId, nowIso);
+    const now = Date.parse(nowIso);
+    const reclaimBefore = now - (PERF.dialogueExecTimeoutMs + RECLAIM_GRACE_MS);
+    // A session is blocked once it has a command in flight or its oldest waiting
+    // message is not yet eligible, so each session receives its messages in order.
+    const blocked = new Set<string>();
+    for (const message of this.backend.listMessagesByStatus(machineId, ["delivered", "running"])) {
+      if (Date.parse(message.updated_at) < reclaimBefore) {
+        this.transition(message, "queued", "worker", nowIso, {}, null, "reclaimed");
+      } else if (message.session_id) {
+        blocked.add(message.session_id);
+      }
+    }
+    const commands: PendingCommand[] = [];
+    for (const message of this.backend.listMessagesByStatus(machineId, ["queued", "held_busy"])) {
+      const sessionId = message.session_id;
+      if (!sessionId || blocked.has(sessionId)) continue;
+      if (Date.parse(message.expires_at) <= now) continue;
+      const session = this.backend.getSession(sessionId);
+      if (!session) {
+        this.transition(
+          message,
+          "failed",
+          "worker",
+          nowIso,
+          { reason: "session_not_found" },
+          "session_not_found",
+        );
+        continue;
+      }
+      blocked.add(sessionId);
+      if (message.status === "held_busy") {
+        const sessionMoved = session.board_seq > (message.last_offer_seq ?? -1);
+        const retryDue = now - Date.parse(message.updated_at) >= PERF.dialogueHeldRetryMs;
+        if (!sessionMoved && !retryDue) continue;
+      }
+      this.transition(message, "delivered", machineId, nowIso, { reason: null }, null, "offered");
+      commands.push({
+        body: message.body,
+        cli: session.cli,
+        cwd: session.cwd,
+        message_id: message.message_id,
+        session_id: sessionId,
+      });
+    }
+    return commands;
+  }
+
+  reportResult(
+    machineId: string,
+    messageId: string,
+    result: CommandResult,
+    nowIso = new Date().toISOString(),
+  ): MessageOutcome {
+    const message = this.backend.getMessage(messageId);
+    if (!message) throw new Error("message not found");
+    if (message.machine_id !== machineId) throw new Error("message belongs to another machine");
+    const inFlight = message.status === "delivered" || message.status === "running";
+    if (result.status === "running" && message.status === "delivered") {
+      return {
+        message: this.transition(message, "running", machineId, nowIso),
+        replyMessage: null,
+      };
+    }
+    if (result.status === "answered" && inFlight) {
+      const answered = this.transition(message, "answered", machineId, nowIso, { reason: null });
+      const replyMessage = this.addReply(message, "agent", result.reply ?? "", nowIso);
+      this.enforceThreadCap(message.thread_id);
+      return { message: answered, replyMessage };
+    }
+    if (result.status === "held_busy" && inFlight) {
+      const reason = truncate(result.reason ?? "busy", REASON_LIMIT);
+      const session = message.session_id ? this.backend.getSession(message.session_id) : null;
+      const held = this.transition(
+        message,
+        "held_busy",
+        machineId,
+        nowIso,
+        { last_offer_seq: session?.board_seq ?? null, reason },
+        reason,
+      );
+      return { message: held, replyMessage: null };
+    }
+    if (result.status === "failed" && inFlight) {
+      const reason = truncate(result.reason ?? "failed", REASON_LIMIT);
+      const failed = this.transition(message, "failed", machineId, nowIso, { reason }, reason);
+      return { message: failed, replyMessage: null };
+    }
+    throw new Error("invalid transition");
+  }
+
+  museInbox(nowIso = new Date().toISOString()): DialogueMessage[] {
+    this.expireMessages(null, nowIso);
+    return this.backend
+      .listMessagesByStatus(null, ["queued"])
+      .filter((message) => message.thread_id === MUSE_THREAD_ID && message.author === "pen");
+  }
+
+  museReply(messageId: string, body: string, nowIso = new Date().toISOString()): MessageOutcome {
+    const text = validBody(body);
+    this.expireMessages(null, nowIso);
+    const original = this.backend.getMessage(messageId);
+    if (!original || original.thread_id !== MUSE_THREAD_ID) throw new Error("message not found");
+    if (original.author !== "pen" || original.status !== "queued") {
+      throw new Error("invalid transition");
+    }
+    const replyMessage = this.addReply(original, "muse", text, nowIso);
+    this.audit(replyMessage.message_id, "muse", "replied", nowIso);
+    const message = this.transition(original, "answered", "muse", nowIso);
+    this.enforceThreadCap(MUSE_THREAD_ID);
+    return { message, replyMessage };
   }
 
   getSession(sessionId: string): SessionRow | null {
@@ -536,7 +998,7 @@ export class BoardService {
     now = new Date(),
     eventRetentionDays: number = PERF.eventRetentionDays,
     sessionRetentionDays: number = PERF.sessionRetentionDays,
-  ): { events: number; sessions: number } {
+  ): PruneCounts {
     const eventCutoff = new Date(
       now.getTime() - eventRetentionDays * 24 * 60 * 60 * 1000,
     ).toISOString();

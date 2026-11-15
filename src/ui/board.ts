@@ -1,4 +1,11 @@
+import {
+  type DialogueAuthor,
+  type DialogueMessage,
+  type DialogueStatus,
+  MUSE_THREAD_ID,
+} from "../shared/dialogue.js";
 import type { MachineRow, SessionRow } from "../shared/envelope.js";
+import { PERF } from "../shared/perf.js";
 
 interface SnapshotMessage {
   machines: MachineRow[];
@@ -13,6 +20,27 @@ interface SessionMessage {
   type: "session";
 }
 
+interface ThreadMessage {
+  thread_id: string;
+  type: "thread";
+}
+
+const STATUS_LABELS: Record<DialogueStatus, string> = {
+  answered: "回答済み",
+  delivered: "配送済み",
+  expired: "期限切れ",
+  failed: "失敗",
+  held_busy: "保留（実行中）",
+  queued: "送信待ち",
+  running: "実行中",
+};
+
+const AUTHOR_LABELS: Record<DialogueAuthor, string> = {
+  agent: "エージェント",
+  muse: "Muse",
+  pen: "あなた",
+};
+
 const sessions = new Map<string, SessionRow>();
 const machines = new Map<string, MachineRow>();
 let lastSequence = 0;
@@ -21,11 +49,115 @@ let resyncing = false;
 const board = document.querySelector<HTMLElement>("#board");
 const machineList = document.querySelector<HTMLElement>("#machines");
 const status = document.querySelector<HTMLElement>("#status");
+const museThread = document.querySelector<HTMLElement>("#muse-thread");
+// Thread containers by thread id. Session dialogue nodes survive card re-renders,
+// so an open thread and a half typed message are not lost on a live update.
+const threadViews = new Map<string, HTMLElement>();
+const dialogues = new Map<string, HTMLDetailsElement>();
 
 function element(tag: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
   if (text !== undefined) node.textContent = text;
   return node;
+}
+
+function threadPath(threadId: string): string {
+  return threadId === MUSE_THREAD_ID
+    ? "/api/muse/messages"
+    : `/api/sessions/${encodeURIComponent(threadId)}/messages`;
+}
+
+function renderMessage(message: DialogueMessage): HTMLElement {
+  const item = element("li");
+  item.className = "message";
+  item.dataset.author = message.author;
+  const header = element("p");
+  header.append(element("strong", AUTHOR_LABELS[message.author]));
+  if (message.author === "pen") {
+    const chip = element("span", STATUS_LABELS[message.status]);
+    chip.className = "chip";
+    chip.dataset.status = message.status;
+    header.append(" ", chip);
+    if (message.reason) header.append(` (${message.reason})`);
+  }
+  item.append(header, element("p", message.body));
+  return item;
+}
+
+function composer(threadId: string): HTMLFormElement {
+  const form = document.createElement("form");
+  const input = document.createElement("textarea");
+  input.maxLength = PERF.dialogueMessageMaxChars;
+  input.rows = 3;
+  input.setAttribute("aria-label", "メッセージ");
+  const button = document.createElement("button");
+  button.type = "submit";
+  button.textContent = "送信";
+  const error = element("p");
+  error.className = "attention";
+  form.append(input, button, error);
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const body = input.value.trim();
+    if (!body || button.disabled) return;
+    button.disabled = true;
+    error.textContent = "";
+    void fetch(threadPath(threadId), {
+      body: JSON.stringify({ body }),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+    })
+      .then(async (response) => {
+        if (response.ok) input.value = "";
+        else error.textContent = `送信に失敗しました（${response.status}）`;
+        await loadThread(threadId);
+      })
+      .catch(() => {
+        error.textContent = "送信に失敗しました";
+      })
+      .finally(() => {
+        button.disabled = false;
+      });
+  });
+  return form;
+}
+
+function renderThread(container: HTMLElement, threadId: string, messages: DialogueMessage[]): void {
+  let list = container.querySelector<HTMLElement>(":scope > .thread");
+  if (!list) {
+    list = element("ol");
+    list.className = "thread";
+    container.replaceChildren(list, composer(threadId));
+  }
+  list.replaceChildren(...messages.map(renderMessage));
+  if (!messages.length) list.append(element("li", "まだメッセージはありません。"));
+}
+
+async function loadThread(threadId: string): Promise<void> {
+  const container = threadViews.get(threadId);
+  if (!container) return;
+  const response = await fetch(threadPath(threadId));
+  if (!response.ok) return;
+  const data = (await response.json()) as { messages: DialogueMessage[] };
+  renderThread(container, threadId, data.messages);
+}
+
+function dialogueFor(sessionId: string): HTMLDetailsElement {
+  const existing = dialogues.get(sessionId);
+  if (existing) return existing;
+  const details = document.createElement("details");
+  details.className = "dialogue";
+  const container = element("div");
+  details.append(element("summary", "対話"), container);
+  threadViews.set(sessionId, container);
+  let loaded = false;
+  details.addEventListener("toggle", () => {
+    if (!details.open || loaded) return;
+    loaded = true;
+    void loadThread(sessionId);
+  });
+  dialogues.set(sessionId, details);
+  return details;
 }
 
 function renderMachines(): void {
@@ -81,7 +213,16 @@ function renderSessions(): void {
         element("p", `${subagent.agent_id} | ${subagent.agent_type} | ${subagent.status}`),
       );
     }
-    card.append(heading, meta, attention, detail, seconds, prompt, drill);
+    card.append(
+      heading,
+      meta,
+      attention,
+      detail,
+      seconds,
+      prompt,
+      drill,
+      dialogueFor(session.session_id),
+    );
     board.append(card);
   }
   updateSeconds();
@@ -149,7 +290,16 @@ function connect(): void {
   });
   socket.addEventListener("message", (event) => {
     try {
-      const data = JSON.parse(String(event.data)) as SnapshotMessage | SessionMessage;
+      const data = JSON.parse(String(event.data)) as
+        | SnapshotMessage
+        | SessionMessage
+        | ThreadMessage;
+      if (data.type === "thread") {
+        if (data.thread_id === MUSE_THREAD_ID || dialogues.get(data.thread_id)?.open) {
+          void loadThread(data.thread_id);
+        }
+        return;
+      }
       if (data.type === "snapshot") {
         for (const machine of data.machines) machines.set(machine.machine_id, machine);
         for (const session of data.sessions) sessions.set(session.session_id, session);
@@ -176,5 +326,9 @@ function connect(): void {
   });
 }
 
+if (museThread) {
+  threadViews.set(MUSE_THREAD_ID, museThread);
+  void loadThread(MUSE_THREAD_ID);
+}
 void load().then(connect);
 setInterval(updateSeconds, 1000);

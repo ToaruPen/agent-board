@@ -31,3 +31,40 @@ main {
 li[data-state="offline"] {
   color: #b42318;
 }
+.dialogue {
+  margin-top: 0.75rem;
+}
+.thread {
+  display: grid;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0.5rem 0;
+  padding: 0;
+}
+.message {
+  border-left: 3px solid #8888;
+  padding-left: 0.5rem;
+}
+.message p {
+  margin: 0.25rem 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.chip {
+  border: 1px solid #8888;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  padding: 0 0.5rem;
+}
+.chip[data-status="answered"] {
+  color: #027a48;
+}
+.chip[data-status="failed"],
+.chip[data-status="expired"] {
+  color: #b42318;
+}
+textarea {
+  box-sizing: border-box;
+  font: inherit;
+  width: 100%;
+}

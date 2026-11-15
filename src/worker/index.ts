@@ -7,6 +7,7 @@ import {
   localBypass,
   machineFromToken,
   mcpAuthorized,
+  museAuthorized,
 } from "./auth.js";
 import { BoardDurableObject } from "./board-do.js";
 import { DEMO_MACHINES, DEMO_SESSIONS } from "./demo.js";
@@ -111,6 +112,43 @@ async function handleHeartbeat(request: Request, env: Env): Promise<Response> {
   );
 }
 
+async function handleCommandResult(
+  request: Request,
+  env: Env,
+  messageId: string,
+): Promise<Response> {
+  const machine = await machineFromToken(request, env);
+  if (!machine) return json({ error: "unauthorized" }, 401);
+  const text = await readBody(request, PERF.dialogueResultMaxBytes);
+  if (text === null) return json({ error: "payload too large" }, 413);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return json({ error: "invalid json" }, 400);
+  }
+  if (!isRecord(parsed) || typeof parsed.status !== "string") {
+    return json({ error: "status is required" }, 400);
+  }
+  return forward(
+    env,
+    `/internal/commands/${messageId}/result`,
+    request,
+    JSON.stringify({ ...parsed, machine_id: machine }),
+  );
+}
+
+async function handleMuse(request: Request, env: Env, url: URL): Promise<Response | null> {
+  const inbox = url.pathname === "/api/muse/inbox" && request.method === "GET";
+  const reply = url.pathname === "/api/muse/reply" && request.method === "POST";
+  if (!inbox && !reply) return null;
+  if (!(await museAuthorized(request, env))) return json({ error: "unauthorized" }, 401);
+  if (inbox) return forward(env, "/internal/muse/inbox", request);
+  const text = await readBody(request, PERF.dialogueResultMaxBytes);
+  if (text === null) return json({ error: "payload too large" }, 413);
+  return forward(env, "/internal/muse/reply", request, text);
+}
+
 async function handleApi(request: Request, env: Env, url: URL): Promise<Response> {
   if (url.pathname === "/api/ingest" && request.method === "POST") {
     return handleIngest(request, env);
@@ -125,6 +163,12 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
     if (text === null) return json({ error: "payload too large" }, 413);
     return forward(env, "/internal/mcp", request, text);
   }
+  const commandResult = url.pathname.match(/^\/api\/commands\/([^/]+)\/result$/);
+  if (commandResult && request.method === "POST") {
+    return handleCommandResult(request, env, commandResult[1] as string);
+  }
+  const muse = await handleMuse(request, env, url);
+  if (muse) return muse;
   if (!(await accessAuthorized(request, env))) return json({ error: "unauthorized" }, 401);
   if (url.searchParams.get("demo") === "1" && localBypass(env)) {
     if (url.pathname === "/api/sessions") return json({ sessions: DEMO_SESSIONS });
@@ -142,6 +186,18 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
   if (session) return forward(env, `/internal/sessions/${session[1]}`, request);
   const events = url.pathname.match(/^\/api\/sessions\/([^/]+)\/events$/);
   if (events) return forward(env, `/internal/sessions/${events[1]}/events`, request);
+  const thread = url.pathname.match(/^\/api\/sessions\/([^/]+)\/messages$/);
+  const threadPath = thread
+    ? `/internal/sessions/${thread[1]}/messages`
+    : url.pathname === "/api/muse/messages"
+      ? "/internal/muse/messages"
+      : null;
+  if (threadPath && request.method === "GET") return forward(env, threadPath, request);
+  if (threadPath && request.method === "POST") {
+    const text = await readBody(request, PERF.dialogueResultMaxBytes);
+    if (text === null) return json({ error: "payload too large" }, 413);
+    return forward(env, threadPath, request, text);
+  }
   return json({ error: "not found" }, 404);
 }
 

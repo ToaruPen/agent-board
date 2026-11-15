@@ -17,6 +17,7 @@ function config(home: string, endpoint: string): SenderConfig {
   writeFileSync(join(home, "token"), "test-token");
   return {
     configPath: join(home, "config.json"),
+    dialogueEnabled: true,
     endpoint,
     home,
     machineId: "machine-a",

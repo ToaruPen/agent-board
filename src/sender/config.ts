@@ -7,6 +7,7 @@ export const SENDER_PERF = PERF;
 
 export interface SenderConfig {
   configPath: string;
+  dialogueEnabled: boolean;
   endpoint: string;
   home: string;
   machineId: string;
@@ -39,6 +40,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SenderConfig {
   }
   return {
     configPath,
+    dialogueEnabled: parsed.dialogue_enabled !== false,
     endpoint: endpoint.replace(/\/$/, ""),
     home,
     machineId,
