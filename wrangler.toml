@@ -3,7 +3,8 @@ main = "src/worker/index.ts"
 compatibility_date = "2024-11-01"
 # No account_id here on purpose: this repo is public. Wrangler takes the
 # account from the CLOUDFLARE_ACCOUNT_ID environment variable instead.
-workers_dev = true
+# The board is served on a custom domain only; the workers.dev URL is off.
+workers_dev = false
 
 [vars]
 ENVIRONMENT = "production"
