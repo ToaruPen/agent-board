@@ -1,0 +1,5 @@
+id: no-empty-catch
+valid:
+  - 'try { work(); } catch (error) { report(error); }'
+invalid:
+  - 'try { work(); } catch { }'

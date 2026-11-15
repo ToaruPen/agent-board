@@ -1,0 +1,6 @@
+ruleDirs:
+  - rules
+testConfigs:
+  - testDir: rule-tests
+    skip: []
+    snapshotDir: __snapshots__

@@ -1,0 +1,7 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": ["src/sender/transcript-watcher.ts", "src/ui/board.ts"],
+  "ignoreDependencies": ["@secretlint/secretlint-rule-preset-recommend"],
+  "ignoreExportsUsedInFile": true,
+  "project": ["src/**/*.ts", "tests/**/*.ts"]
+}

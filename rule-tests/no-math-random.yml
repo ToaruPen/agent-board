@@ -1,0 +1,5 @@
+id: no-math-random
+valid:
+  - 'const id = crypto.randomUUID();'
+invalid:
+  - 'const id = String(Math.random());'

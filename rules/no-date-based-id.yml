@@ -1,0 +1,10 @@
+id: no-date-based-id
+language: TypeScript
+severity: error
+message: Identifiers use crypto UUIDs from the ids module. Date values are timestamps only.
+files:
+  - src/shared/ids.ts
+rule:
+  any:
+    - pattern: Date.now()
+    - pattern: new Date()

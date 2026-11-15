@@ -1,0 +1,8 @@
+id: no-console-in-runtime
+snapshots:
+  console.log("started");:
+    labels:
+    - source: console.log("started")
+      style: primary
+      start: 0
+      end: 22

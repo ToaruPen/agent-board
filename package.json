@@ -1,0 +1,44 @@
+{
+  "name": "agent-board",
+  "version": "0.1.0",
+  "private": false,
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/build-ui.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test tests/*.test.ts",
+    "fmt": "biome format --write .",
+    "fmt:check": "biome format .",
+    "lint": "biome lint .",
+    "check:biome": "biome check .",
+    "knip": "knip --no-progress",
+    "astgrep": "ast-grep scan && ast-grep test",
+    "secretlint": "secretlint \"**/*\"",
+    "canary": "node scripts/canary-secretlint.mjs",
+    "e2e": "node scripts/e2e-local.mjs",
+    "dev": "node scripts/build-ui.mjs && wrangler dev",
+    "deploy": "wrangler deploy",
+    "doctor": "tsx src/sender/doctor.ts",
+    "sender": "tsx src/sender/hook.ts",
+    "daemon": "tsx src/sender/daemon.ts",
+    "build:ui": "node scripts/build-ui.mjs",
+    "perf": "node scripts/perf-local.mjs"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@ast-grep/cli": "^0.39.0",
+    "@biomejs/biome": "^1.9.4",
+    "@secretlint/secretlint-rule-preset-recommend": "^8.2.4",
+    "@types/node": "^22.10.0",
+    "knip": "^5.40.0",
+    "secretlint": "^8.2.4",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "wrangler": "^3.99.0",
+    "esbuild": "^0.24.0"
+  }
+}

@@ -1,0 +1,28 @@
+name = "agent-board"
+main = "src/worker/index.ts"
+compatibility_date = "2024-11-01"
+account_id = "REPLACE_ME"
+workers_dev = true
+
+[vars]
+ENVIRONMENT = "production"
+LOCAL_DEV_AUTH_BYPASS = "false"
+ACCESS_ISSUER = "https://REPLACE_ME.cloudflareaccess.com"
+ACCESS_AUD = "REPLACE_ME"
+EVENT_RETENTION_DAYS = "7"
+SESSION_RETENTION_DAYS = "30"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+[[durable_objects.bindings]]
+name = "BOARD"
+class_name = "BoardDurableObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["BoardDurableObject"]
+
+[triggers]
+crons = ["17 3 * * *"]

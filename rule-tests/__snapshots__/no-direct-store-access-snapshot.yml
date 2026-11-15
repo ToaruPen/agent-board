@@ -1,0 +1,8 @@
+id: no-direct-store-access
+snapshots:
+  const row = ctx.storage.get("session");:
+    labels:
+    - source: ctx.storage.get("session")
+      style: primary
+      start: 12
+      end: 38

@@ -1,0 +1,8 @@
+id: no-ts-suppression
+language: TypeScript
+severity: error
+message: TypeScript suppression comments hide errors. Fix the type instead.
+rule:
+  all:
+    - kind: comment
+    - regex: '@ts-(ignore|expect-error|nocheck)'

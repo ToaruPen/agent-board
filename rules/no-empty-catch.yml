@@ -1,0 +1,8 @@
+id: no-empty-catch
+language: TypeScript
+severity: error
+message: Empty catch blocks hide failures. Log through the logger or rethrow.
+rule:
+  pattern:
+    context: 'try { $$$BODY } catch { }'
+    selector: try_statement

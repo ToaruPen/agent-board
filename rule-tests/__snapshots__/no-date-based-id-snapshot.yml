@@ -1,0 +1,8 @@
+id: no-date-based-id
+snapshots:
+  const id = String(Date.now());:
+    labels:
+    - source: Date.now()
+      style: primary
+      start: 18
+      end: 28

@@ -1,0 +1,5 @@
+id: no-direct-store-access
+valid:
+  - 'const row = store.getSession(id);'
+invalid:
+  - 'const row = ctx.storage.get("session");'

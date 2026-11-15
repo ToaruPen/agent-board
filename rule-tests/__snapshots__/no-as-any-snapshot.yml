@@ -1,0 +1,8 @@
+id: no-as-any
+snapshots:
+  const x = value as any;:
+    labels:
+    - source: value as any
+      style: primary
+      start: 10
+      end: 22

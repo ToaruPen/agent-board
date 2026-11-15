@@ -1,0 +1,5 @@
+id: no-ts-suppression
+valid:
+  - '// A normal comment.'
+invalid:
+  - '// @ts-ignore'

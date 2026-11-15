@@ -1,0 +1,32 @@
+[
+  { "cwd": "/example/demo-repo", "hook_event_name": "SessionStart", "session_id": "codex-demo-1" },
+  {
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "Document the demo API",
+    "session_id": "codex-demo-1"
+  },
+  { "hook_event_name": "PreToolUse", "session_id": "codex-demo-1", "tool_name": "shell" },
+  { "agent_type": "worker", "hook_event_name": "SubagentStart", "session_id": "codex-demo-1" },
+  {
+    "agent_type": "worker",
+    "hook_event_name": "SubagentStop",
+    "last_assistant_message": "Draft ready",
+    "session_id": "codex-demo-1"
+  },
+  {
+    "hook_event_name": "Notification",
+    "notification_type": "agent_needs_input",
+    "session_id": "codex-demo-1"
+  },
+  {
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "Use the short form",
+    "session_id": "codex-demo-1"
+  },
+  {
+    "hook_event_name": "Stop",
+    "last_assistant_message": "Docs updated",
+    "session_id": "codex-demo-1"
+  },
+  { "hook_event_name": "SessionEnd", "session_id": "codex-demo-1" }
+]

@@ -1,0 +1,45 @@
+[
+  {
+    "cwd": "/example/demo-repo",
+    "hook_event_name": "SessionStart",
+    "session_id": "claude-demo-1",
+    "transcript_path": "/example/never-sent.jsonl"
+  },
+  {
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "Fix the demo parser and add a regression test",
+    "session_id": "claude-demo-1"
+  },
+  {
+    "hook_event_name": "PreToolUse",
+    "session_id": "claude-demo-1",
+    "tool_input": { "command": "secret argument value" },
+    "tool_name": "Bash"
+  },
+  { "hook_event_name": "PostToolUse", "session_id": "claude-demo-1", "tool_name": "Bash" },
+  {
+    "agent_id": "agent-1",
+    "agent_type": "reviewer",
+    "hook_event_name": "SubagentStart",
+    "session_id": "claude-demo-1"
+  },
+  {
+    "agent_id": "agent-1",
+    "hook_event_name": "SubagentStop",
+    "last_assistant_message": "Review found no blocking issue",
+    "session_id": "claude-demo-1"
+  },
+  { "hook_event_name": "PermissionRequest", "session_id": "claude-demo-1", "tool_name": "Bash" },
+  {
+    "hook_event_name": "Notification",
+    "notification_type": "permission_prompt",
+    "session_id": "claude-demo-1"
+  },
+  { "hook_event_name": "PostToolUse", "session_id": "claude-demo-1", "tool_name": "Bash" },
+  {
+    "hook_event_name": "Stop",
+    "last_assistant_message": "Parser fixed",
+    "session_id": "claude-demo-1"
+  },
+  { "hook_event_name": "SessionEnd", "session_id": "claude-demo-1" }
+]

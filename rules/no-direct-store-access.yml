@@ -1,0 +1,11 @@
+id: no-direct-store-access
+language: TypeScript
+severity: error
+message: Durable Object storage is owned by the store module. Call the store instead.
+files:
+  - src/worker/**/*.ts
+  - src/sender/**/*.ts
+ignores:
+  - src/worker/store.ts
+rule:
+  pattern: $OBJ.storage.$METHOD($$$ARGS)

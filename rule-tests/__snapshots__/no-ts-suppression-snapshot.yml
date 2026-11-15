@@ -1,0 +1,14 @@
+id: no-ts-suppression
+snapshots:
+  // @ts-ignore:
+    labels:
+    - source: // @ts-ignore
+      style: primary
+      start: 0
+      end: 13
+  // @ts-ignore\nconst x = value;:
+    labels:
+    - source: // @ts-ignore\nconst x = value;
+      style: primary
+      start: 0
+      end: 31

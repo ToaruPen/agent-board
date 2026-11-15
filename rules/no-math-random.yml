@@ -1,0 +1,6 @@
+id: no-math-random
+language: TypeScript
+severity: error
+message: Identifiers and tokens use crypto random values from the ids module.
+rule:
+  pattern: Math.random()

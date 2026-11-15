@@ -1,0 +1,8 @@
+id: no-empty-catch
+snapshots:
+  try { work(); } catch { }:
+    labels:
+    - source: try { work(); } catch { }
+      style: primary
+      start: 0
+      end: 25

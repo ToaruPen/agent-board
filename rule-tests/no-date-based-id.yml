@@ -1,0 +1,5 @@
+id: no-date-based-id
+valid:
+  - 'const id = crypto.randomUUID();'
+invalid:
+  - 'const id = String(Date.now());'

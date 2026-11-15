@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Notification": [{ "hooks": [{ "command": "~/.agent-board/bin/send", "type": "command" }] }],
+    "PermissionRequest": [
+      { "hooks": [{ "command": "~/.agent-board/bin/send", "type": "command" }] }
+    ],
+    "PostToolUse": [{ "hooks": [{ "command": "~/.agent-board/bin/send", "type": "command" }] }],
+    "PreToolUse": [{ "hooks": [{ "command": "~/.agent-board/bin/send", "type": "command" }] }],
+    "SessionEnd": [{ "hooks": [{ "command": "~/.agent-board/bin/send", "type": "command" }] }],
+    "SessionStart": [{ "hooks": [{ "command": "~/.agent-board/bin/send", "type": "command" }] }],
+    "Stop": [{ "hooks": [{ "command": "~/.agent-board/bin/send", "type": "command" }] }],
+    "SubagentStart": [{ "hooks": [{ "command": "~/.agent-board/bin/send", "type": "command" }] }],
+    "SubagentStop": [{ "hooks": [{ "command": "~/.agent-board/bin/send", "type": "command" }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "command": "~/.agent-board/bin/send", "type": "command" }] }]
+  }
+}

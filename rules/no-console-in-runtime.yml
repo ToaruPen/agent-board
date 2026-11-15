@@ -1,0 +1,12 @@
+id: no-console-in-runtime
+language: TypeScript
+severity: error
+message: Runtime code logs through the shared logger module.
+files:
+  - src/worker/**/*.ts
+  - src/sender/**/*.ts
+  - src/shared/**/*.ts
+ignores:
+  - src/shared/logger.ts
+rule:
+  pattern: console.$METHOD($$$ARGS)
