@@ -42,6 +42,13 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+// esbuild writes non-ASCII as \uXXXX escapes, so decode before searching the bundle.
+function decodeEscapes(text) {
+  return text.replace(/\\u\{([0-9a-fA-F]+)\}|\\u([0-9a-fA-F]{4})/g, (_, wide, narrow) =>
+    String.fromCodePoint(Number.parseInt(wide ?? narrow, 16)),
+  );
+}
+
 function hash(value) {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -221,8 +228,15 @@ try {
     assert(page.ok, "board page should load");
     const pageText = await page.text();
     assert(pageText.includes("Agent Board"), "board page should contain the title");
+    for (const marker of ["対応待ち", "プロジェクト", "Muse への相談", 'id="theme"']) {
+      assert(pageText.includes(marker), `board page should contain the v2 shell marker ${marker}`);
+    }
     const appJs = await fetch(`${base}/app.js`);
     assert(appJs.ok, "board script should load");
+    const appText = decodeEscapes(await appJs.text());
+    for (const marker of ["承認待ち", "Solarized"]) {
+      assert(appText.includes(marker), `board script should contain ${marker}`);
+    }
     const demoResponse = await fetch(`${base}/api/sessions?demo=1`);
     const demoData = await demoResponse.json();
     assert(demoData.sessions.length >= 2, "demo mode should return synthetic sessions");
@@ -249,6 +263,16 @@ try {
     assert(session.activity === "running", "session should be running after prompt");
     assert(session.title.includes("Fix the demo parser"), "title should come from first prompt");
     assert(session.subagent_count === 1, "subagent should roll up on the parent");
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    assert(
+      messages.some(
+        (message) =>
+          message.type === "machine" &&
+          message.machine?.machine_id === "machine-a" &&
+          message.online === true,
+      ),
+      "websocket should carry the machine-a online notice (online: true) after the first heartbeat",
+    );
 
     stage("drive-permission");
     for (const event of [

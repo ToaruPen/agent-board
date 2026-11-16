@@ -1,25 +1,60 @@
 <!doctype html>
-<html lang="en">
+<html lang="ja">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Agent Board</title>
+    <script>
+    (function () {
+      var choice = "auto";
+      try { choice = localStorage.getItem("agent-board.theme") || "auto"; } catch (e) { /* 保存できない環境では自動のまま */ }
+      var known = ["auto", "std-light", "std-dark", "solarized-light", "solarized-dark", "nord", "github-light"];
+      if (known.indexOf(choice) < 0) choice = "auto";
+      var dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+      document.documentElement.dataset.themeChoice = choice;
+      document.documentElement.dataset.theme = choice === "auto" ? (dark ? "std-dark" : "std-light") : choice;
+    })();
+    </script>
+    <link rel="icon" id="favicon" href="data:,">
     <link rel="stylesheet" href="/styles.css">
   </head>
-  <body>
-    <header>
-      <h1>Agent Board</h1>
-      <p id="status">Connecting</p>
-    </header>
-    <section aria-labelledby="machines-heading">
-      <h2 id="machines-heading">Machines</h2>
-      <ul id="machines"></ul>
-    </section>
-    <section aria-labelledby="muse-heading">
-      <h2 id="muse-heading">Muse への相談</h2>
-      <div id="muse-thread"></div>
-    </section>
-    <main id="board" aria-live="polite"></main>
+  <body data-conn="lost" data-pane="list">
+    <nav class="side" aria-label="セッション一覧">
+      <div class="side-head">
+        <h1>Agent Board</h1>
+        <p class="conn" id="conn"></p>
+      </div>
+      <button type="button" class="nav-over" id="nav-over"><b>概要</b><span id="over-sum"></span></button>
+      <button type="button" class="nav-over" id="nav-muse"><b>Muse への相談</b><span id="muse-sum"></span></button>
+      <section class="wait" aria-labelledby="wait-h">
+        <h2 class="sec-h" id="wait-h">対応待ち <span id="wait-n"></span><span class="sec-note" id="wait-note"></span></h2>
+        <ul class="wait-list" id="wait-list"></ul>
+      </section>
+      <div class="tree" id="tree">
+        <h2 class="sec-h">プロジェクト</h2>
+        <ul id="proj-list"></ul>
+      </div>
+      <div class="side-foot">
+        <button type="button" class="foot-m" id="foot-m"></button>
+        <label class="theme"><span>テーマ</span>
+          <select id="theme">
+            <option value="auto">自動</option>
+            <optgroup label="明るいテーマ">
+              <option value="std-light">標準 ライト</option>
+              <option value="solarized-light">Solarized Light</option>
+              <option value="github-light">GitHub Light</option>
+            </optgroup>
+            <optgroup label="暗いテーマ">
+              <option value="std-dark">標準 ダーク</option>
+              <option value="solarized-dark">Solarized Dark</option>
+              <option value="nord">Nord</option>
+            </optgroup>
+          </select>
+        </label>
+      </div>
+    </nav>
+    <main class="main" id="main" tabindex="-1" aria-label="詳細"><div class="main-in" id="main-in"></div></main>
+    <p class="sr" id="announce" aria-live="polite"></p>
     <script type="module" src="/app.js"></script>
   </body>
 </html>
