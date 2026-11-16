@@ -7,11 +7,12 @@ import {
   mkdtempSync,
   openSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 const root = process.cwd();
@@ -193,6 +194,148 @@ async function sessionMessage(base, sessionId, messageId) {
   return { message: found, reply };
 }
 
+// The mobile check drives a Chromium the machine already has, over the DevTools protocol, so the
+// repo takes no browser dependency. Without one the stage is skipped and says so.
+function findChromium() {
+  if (process.env.AGENT_BOARD_CHROMIUM) return process.env.AGENT_BOARD_CHROMIUM;
+  const cache = join(homedir(), ".cache", "ms-playwright");
+  if (!existsSync(cache)) return null;
+  const dirs = readdirSync(cache).filter((dir) => dir.startsWith("chromium-"));
+  for (const dir of dirs.sort().reverse()) {
+    const bin = join(cache, dir, "chrome-linux64", "chrome");
+    if (existsSync(bin)) return bin;
+  }
+  return null;
+}
+
+async function openBrowser(bin) {
+  const profile = join(tmp, "chromium-profile");
+  const proc = spawn(
+    bin,
+    [
+      "--headless=new",
+      "--no-sandbox",
+      "--disable-gpu",
+      "--no-first-run",
+      "--remote-debugging-port=0",
+      `--user-data-dir=${profile}`,
+      "about:blank",
+    ],
+    { stdio: "ignore" },
+  );
+  const portFile = join(profile, "DevToolsActivePort");
+  const deadline = Date.now() + 15_000;
+  while (!existsSync(portFile)) {
+    assert(Date.now() < deadline, "Chromium did not open its DevTools port");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const port = readFileSync(portFile, "utf8").split("\n")[0];
+  const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+  const ws = new WebSocket(targets.find((target) => target.type === "page").webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    ws.addEventListener("open", resolve, { once: true });
+    ws.addEventListener("error", reject, { once: true });
+  });
+  let next = 0;
+  const pending = new Map();
+  ws.addEventListener("message", (event) => {
+    const reply = JSON.parse(String(event.data));
+    const waiter = pending.get(reply.id);
+    if (!waiter) return;
+    pending.delete(reply.id);
+    if (reply.error) waiter.reject(new Error(reply.error.message));
+    else waiter.resolve(reply.result);
+  });
+  const send = (method, params = {}) =>
+    new Promise((resolve, reject) => {
+      next += 1;
+      pending.set(next, { reject, resolve });
+      ws.send(JSON.stringify({ id: next, method, params }));
+    });
+  const evaluate = async (expression) => {
+    const result = await send("Runtime.evaluate", {
+      awaitPromise: true,
+      expression,
+      returnByValue: true,
+    });
+    if (result.exceptionDetails) throw new Error(result.exceptionDetails.text);
+    return result.result.value;
+  };
+  const until = async (expression, message) => {
+    const deadline = Date.now() + 10_000;
+    while (!(await evaluate(expression))) {
+      assert(Date.now() < deadline, message);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  };
+  const close = () => {
+    ws.close();
+    proc.kill("SIGKILL");
+  };
+  return { close, evaluate, send, until };
+}
+
+async function checkMobileBoard(base) {
+  const bin = findChromium();
+  if (!bin) {
+    process.stdout.write(
+      "stage mobile-board skipped: no Chromium found (set AGENT_BOARD_CHROMIUM)\n",
+    );
+    return;
+  }
+  const page = await openBrowser(bin);
+  try {
+    await page.send("Emulation.setDeviceMetricsOverride", {
+      deviceScaleFactor: 2,
+      height: 844,
+      mobile: true,
+      width: 390,
+    });
+    await page.send("Page.navigate", { url: `${base}/` });
+    await page.until(
+      "document.querySelector('.wait .row') !== null",
+      "390px: the waiting session should appear in the list",
+    );
+    assert(
+      await page.evaluate(`document.body.dataset.pane === "list"
+        && getComputedStyle(document.querySelector(".main")).display === "none"
+        && document.querySelector("#wait-h").textContent.includes("対応待ち")
+        && document.querySelector("#wait-h").getBoundingClientRect().top
+          < document.querySelector("#nav-over").getBoundingClientRect().top
+        && document.querySelector(".wait .row").textContent.includes("承認待ち")`),
+      "390px: the list is the home screen with 対応待ち first",
+    );
+    const noSideways = `[document.documentElement, document.querySelector(".side"), document.querySelector(".main")]
+      .every((el) => el.scrollWidth <= el.clientWidth)`;
+    assert(await page.evaluate(noSideways), "390px: the list should not scroll sideways");
+    await page.evaluate(`document.querySelector(".wait .row").click()`);
+    await page.until(
+      `document.body.dataset.pane === "main" && document.querySelector(".d-title") !== null`,
+      "390px: tapping a session should open its detail",
+    );
+    assert(
+      await page.evaluate(`getComputedStyle(document.querySelector(".side")).display === "none"
+        && document.querySelector(".back").getBoundingClientRect().height >= 44`),
+      "390px: the detail should fill the screen and offer a 44px back control",
+    );
+    assert(await page.evaluate(noSideways), "390px: the detail should not scroll sideways");
+    await page.evaluate(`document.querySelector(".back").click()`);
+    await page.until(
+      `document.body.dataset.pane === "list" && document.querySelector(".wait .row").offsetParent !== null`,
+      "390px: the back control should return to the list",
+    );
+    await page.evaluate(`document.querySelector(".wait .row").click()`);
+    await page.until(`document.body.dataset.pane === "main"`, "390px: reopening should work");
+    await page.evaluate("setTimeout(() => history.back(), 0)");
+    await page.until(
+      `document.body.dataset.pane === "list"`,
+      "390px: the browser back should return to the list",
+    );
+  } finally {
+    page.close();
+  }
+}
+
 const stage = (name) => process.stdout.write(`stage ${name}\n`);
 const port = await freePort();
 let base = "";
@@ -292,6 +435,9 @@ try {
       ),
       "websocket should carry the permission row",
     );
+
+    stage("mobile-board");
+    await checkMobileBoard(base);
 
     stage("drive-stop");
     for (const event of byName("PostToolUse")) hook(event);

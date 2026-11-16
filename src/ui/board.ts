@@ -302,6 +302,7 @@ const mainIn = byId<HTMLElement>("main-in");
 const themeSelect = byId<HTMLSelectElement>("theme");
 const announcer = byId<HTMLElement>("announce");
 const favicon = byId<HTMLLinkElement>("favicon");
+const sideEl = document.querySelector<HTMLElement>(".side");
 const detailTop = h("div");
 const detailBottom = h("div");
 const museTop = h("div");
@@ -453,6 +454,11 @@ function chev(): HTMLSpanElement {
   c.innerHTML = CHEV;
   return c;
 }
+
+// One back control, always the first child of the main pane so it can stay pinned while the
+// detail scrolls on a narrow screen.
+const backBar = h("button", { class: "back", "data-back": "1", type: "button" });
+backBar.append(chev(), "一覧");
 
 function makeRow(id: string, where: Row["where"]): Row {
   const mk = h("span", { class: "mk" });
@@ -955,8 +961,8 @@ function threadView(threadId: string): ThreadView {
   );
   const root =
     threadId === MUSE_THREAD_ID
-      ? h("section", { class: "blk dlg" }, list, form)
-      : h("section", { class: "blk dlg" }, h("h3", { text: "対話" }), list, form);
+      ? h("section", { class: "blk dlg card" }, list, form)
+      : h("section", { class: "blk dlg card" }, h("h3", { text: "対話" }), list, form);
   const tv: ThreadView = {
     button,
     error,
@@ -1011,6 +1017,11 @@ function blk(title: string, sub: string, ...kids: Child[]): HTMLElement {
   if (sub) head.append(h("span", { class: "sub", text: sub }));
   return h("section", { class: "blk" }, head, ...kids);
 }
+function card(title: string, sub: string, ...kids: Child[]): HTMLElement {
+  const el = blk(title, sub, ...kids);
+  el.classList.add("card");
+  return el;
+}
 function textBlock(
   title: string,
   sub: string,
@@ -1027,9 +1038,6 @@ function textBlock(
 }
 function fact(dl: HTMLElement, k: string, node: Child, cls?: string): void {
   dl.append(h("dt", { text: k }), h("dd", { class: cls ?? null }, node));
-}
-function backBtn(): HTMLButtonElement {
-  return h("button", { class: "back", "data-back": "1", type: "button" }, chev(), "一覧");
 }
 function lostBar(): HTMLElement | null {
   if (conn !== "lost" || !lostAt) return null;
@@ -1140,12 +1148,12 @@ function ovRow(s: SessionRow, v: View, withEvidence: boolean): HTMLLIElement {
 
 function renderOverview(sum: Summary): Child[] {
   const now = Date.now();
-  const kids: Child[] = [backBtn(), lostBar()];
+  const kids: Child[] = [lostBar()];
   if (!machines.size) {
     kids.push(
       h(
         "div",
-        { class: "empty" },
+        { class: "empty card" },
         h("h2", { class: "ov-h", text: "まだどのマシンからも報告がありません" }),
         h("p", {
           text: "マシンのsenderが最初のハートビートを送ると、ここにプロジェクトとセッションが並びます。",
@@ -1187,7 +1195,7 @@ function renderOverview(sum: Summary): Child[] {
 
   const wl = h("ul", { class: "list" }, ...sum.waiting.map((s) => ovRow(s, view(s, now), true)));
   kids.push(
-    blk(
+    card(
       "対応待ち",
       "待ちはじめが古い順",
       sum.waiting.length
@@ -1206,14 +1214,14 @@ function renderOverview(sum: Summary): Child[] {
     }
   }
   kids.push(
-    blk(
+    card(
       "進行中のセッション",
       "プロジェクト順",
       al.children.length ? al : h("p", { class: "zero", text: "進行中のセッションはありません。" }),
     ),
   );
 
-  const machineBlock = blk(
+  const machineBlock = card(
     "マシン",
     `${machines.size}台`,
     h("ul", { class: "list" }, ...[...machines.values()].map((m) => machineLine(m, now))),
@@ -1226,7 +1234,7 @@ function renderOverview(sum: Summary): Child[] {
     .sort((a, b) => b.last_event_at.localeCompare(a.last_event_at));
   if (ended.length) {
     kids.push(
-      blk(
+      card(
         "最近の終了・失敗",
         "新しい順に4件まで。終了したセッションは30日で消えます",
         h("ul", { class: "list" }, ...ended.slice(0, 4).map((s) => ovRow(s, view(s, now), false))),
@@ -1263,7 +1271,7 @@ function renderOverview(sum: Summary): Child[] {
 function renderDetailTop(s: SessionRow, v: View): Child[] {
   const m = machines.get(s.machine_id);
   const p = projectFor(s.session_id);
-  const kids: Child[] = [backBtn(), lostBar()];
+  const kids: Child[] = [];
   kids.push(
     h(
       "p",
@@ -1392,8 +1400,8 @@ function renderDetailTop(s: SessionRow, v: View): Child[] {
     clock(s.last_event_at),
   );
   kids.push(dims);
-
-  kids.push(
+  const texts: Child[] = [];
+  texts.push(
     textBlock(
       "依頼",
       "最初のプロンプト",
@@ -1406,12 +1414,16 @@ function renderDetailTop(s: SessionRow, v: View): Child[] {
     s.last_prompt === s.title ||
     (clipped(s.title, TITLE_LIMIT) && s.last_prompt.startsWith(s.title));
   if (s.last_prompt && !sameAsTitle) {
-    kids.push(textBlock("直近の指示", "このターンのプロンプト", s.last_prompt, PROMPT_LIMIT, ""));
+    texts.push(textBlock("直近の指示", "このターンのプロンプト", s.last_prompt, PROMPT_LIMIT, ""));
   }
-  kids.push(
+  texts.push(
     textBlock("最後の応答", "", s.last_message, MESSAGE_LIMIT, "応答はまだ記録されていません。"),
   );
-  return kids;
+  return [
+    lostBar(),
+    h("div", { class: "d-head card" }, ...kids),
+    h("div", { class: "card" }, ...texts),
+  ];
 }
 
 function renderDetailBottom(s: SessionRow, v: View): Child[] {
@@ -1525,15 +1537,18 @@ function renderDetailBottom(s: SessionRow, v: View): Child[] {
   }
   fact(info, "ボード通番", String(s.board_seq));
   kids.push(blk("セッション情報", "", info));
-  return kids;
+  return [h("div", { class: "card" }, ...kids)];
 }
 
 function renderMuseTop(): Child[] {
   return [
-    backBtn(),
     lostBar(),
-    h("h2", { class: "ov-h", text: "Muse への相談" }),
-    h("p", { class: "ov-sum", text: "Muse への相談です。返信はこのスレッドに届きます。" }),
+    h(
+      "div",
+      { class: "d-head card" },
+      h("h2", { class: "ov-h", text: "Muse への相談" }),
+      h("p", { class: "ov-sum", text: "Muse への相談です。返信はこのスレッドに届きます。" }),
+    ),
   ];
 }
 
@@ -1581,13 +1596,13 @@ function renderMain(sum: Summary, force: boolean): void {
       fill(detailTop, renderDetailTop(s, v));
       fill(detailBottom, renderDetailBottom(s, v));
       if (modeChanged)
-        mainIn.replaceChildren(detailTop, threadView(s.session_id).root, detailBottom);
+        mainIn.replaceChildren(backBar, detailTop, threadView(s.session_id).root, detailBottom);
     }
   } else if (selection.kind === "muse") {
     sig = conn;
     if (force || modeChanged || sig !== mainSig) {
       fill(museTop, renderMuseTop());
-      if (modeChanged) mainIn.replaceChildren(museTop, threadView(MUSE_THREAD_ID).root);
+      if (modeChanged) mainIn.replaceChildren(backBar, museTop, threadView(MUSE_THREAD_ID).root);
     }
   } else {
     const parts: string[] = [
@@ -1602,7 +1617,7 @@ function renderMain(sum: Summary, force: boolean): void {
     }
     for (const m of machines.values()) parts.push(machineSig(m, now));
     sig = parts.join("|");
-    if (force || modeChanged || sig !== mainSig) fill(mainIn, renderOverview(sum));
+    if (force || modeChanged || sig !== mainSig) fill(mainIn, [backBar, ...renderOverview(sum)]);
   }
   mainSig = sig;
   mainMode = mode;
@@ -1648,6 +1663,51 @@ async function loadEvents(id: string): Promise<void> {
 
 // ---------- selection / navigation ----------
 
+// Below this width the list and the detail are two full screens (styles.css uses the same
+// value). Opening the detail adds one history entry, so the browser's back returns to the list.
+const narrow = window.matchMedia("(max-width: 760px)");
+const PANE_STATE = "agent-board.pane";
+type Pane = "list" | "main";
+let listScroll = 0;
+
+function detailEntry(state: unknown): boolean {
+  return typeof state === "object" && state !== null && PANE_STATE in state;
+}
+
+// The list is hidden with display:none while the detail is open, and a sort moment can rebuild
+// it meanwhile, so its scroll offset is kept here rather than trusted to the browser.
+function showPane(pane: Pane): void {
+  const body = document.body;
+  if (body.dataset.pane === pane) return;
+  if (pane === "main") listScroll = sideEl?.scrollTop ?? 0;
+  body.dataset.pane = pane;
+  if (pane !== "list") return;
+  if (sideEl) sideEl.scrollTop = listScroll;
+  document
+    .querySelector<HTMLElement>('.side [aria-current="true"]')
+    ?.focus({ preventScroll: true });
+}
+
+function openPane(): void {
+  if (narrow.matches && document.body.dataset.pane !== "main") {
+    history.pushState({ [PANE_STATE]: "main" }, "");
+  }
+  showPane("main");
+}
+
+// Same as the browser's back when the detail was opened here, so the two never stack.
+function backToList(): void {
+  if (detailEntry(history.state)) history.back();
+  else showPane("list");
+}
+
+window.addEventListener("popstate", (ev) => {
+  showPane(detailEntry(ev.state) ? "main" : "list");
+});
+// A reload keeps the entry's state but starts on the list; drop the marker so the next open
+// pushes a fresh entry instead of stepping back onto this one.
+if (detailEntry(history.state)) history.replaceState(null, "");
+
 function select(next: Selection): void {
   selection = next.kind === "session" && !sessions.has(next.id) ? { kind: "overview" } : next;
   if (selection.kind === "session") {
@@ -1662,7 +1722,7 @@ function select(next: Selection): void {
   } else if (selection.kind === "muse") {
     void loadThread(MUSE_THREAD_ID);
   }
-  document.body.dataset.pane = "main";
+  openPane();
   paintAll(true);
 }
 
@@ -1704,13 +1764,8 @@ document.querySelector(".side")?.addEventListener("click", (ev) => {
 mainEl.addEventListener("click", (ev) => {
   const b = (ev.target as Element | null)?.closest("button");
   if (!b) return;
-  if (b.dataset.back) {
-    document.body.dataset.pane = "list";
-    focusBtn(
-      document.querySelector<HTMLElement>('.tree .row[aria-current="true"]') ??
-        document.querySelector<HTMLElement>('.side .nav-over[aria-current="true"]'),
-    );
-  } else if (b.dataset.sel) select({ id: b.dataset.sel, kind: "session" });
+  if (b.dataset.back) backToList();
+  else if (b.dataset.sel) select({ id: b.dataset.sel, kind: "session" });
   else if (b.dataset.copy) {
     const done = () => {
       b.textContent = "コピーしました";
