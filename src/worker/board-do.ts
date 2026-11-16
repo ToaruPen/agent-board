@@ -8,7 +8,12 @@ import { BoardService, SqlBoardBackend, type SqlStorage } from "./store.js";
 export interface DurableObjectState {
   acceptWebSocket(socket: WebSocket): void;
   getWebSockets(): WebSocket[];
-  storage: { sql: SqlStorage };
+  storage: {
+    deleteAlarm?(): Promise<void>;
+    getAlarm?(): Promise<number | null>;
+    setAlarm?(time: number): Promise<void>;
+    sql: SqlStorage;
+  };
 }
 
 interface WebSocketPairConstructor {
@@ -104,6 +109,54 @@ export class BoardDurableObject {
         }
       }
     }
+  }
+
+  // online carries the transition direction so the board never infers it from heartbeat age.
+  private broadcastMachine(
+    machine: ReturnType<BoardService["listMachines"]>[number],
+    online: boolean,
+  ): void {
+    const payload = JSON.stringify({ machine, online, type: "machine" });
+    for (const socket of this.state.getWebSockets()) {
+      try {
+        socket.send(payload);
+        this.backend.metrics.broadcasts += 1;
+      } catch {
+        try {
+          socket.close(1011, "send failed");
+        } catch {
+          // The socket is already gone. Other sockets still receive the row.
+        }
+      }
+    }
+  }
+
+  // Pushes offline transitions for machines whose heartbeat has gone stale.
+  private sweepMachines(): void {
+    for (const machine of this.service.sweepMachineTransitions(new Date().toISOString())) {
+      this.broadcastMachine(machine, false);
+    }
+  }
+
+  // Pushes online transitions from a heartbeat, sweeps for machines gone stale (offline
+  // transitions), and re-arms the alarm at the next stale deadline. Alarm calls are guarded by
+  // presence checks for test doubles.
+  private async propagateMachineTransitions(
+    onlineTransitions: ReturnType<BoardService["listMachines"]>,
+  ): Promise<void> {
+    for (const machine of onlineTransitions) this.broadcastMachine(machine, true);
+    this.sweepMachines();
+    const storage = this.state.storage;
+    const deadline = this.service.nextMachineStaleDeadline();
+    if (deadline !== null) {
+      if (storage.setAlarm) await storage.setAlarm(deadline);
+    } else if (storage.deleteAlarm) {
+      await storage.deleteAlarm();
+    }
+  }
+
+  async alarm(): Promise<void> {
+    await this.propagateMachineTransitions([]);
   }
 
   private broadcastThread(threadId: string): void {
@@ -211,6 +264,9 @@ export class BoardDurableObject {
         const envelopes = body.events.map((event) => parseEnvelope(event));
         const outcome = this.service.ingest(body.machine_id, envelopes);
         for (const session of outcome.changed) this.broadcastSession(session);
+        // Sweep only: a sweep can only move the earliest deadline later, so the armed alarm stays
+        // valid and ingest makes no alarm write.
+        this.sweepMachines();
         return json({ ...outcome, metrics: this.service.metrics() });
       }
       if (url.pathname === "/internal/heartbeat" && request.method === "POST") {
@@ -224,7 +280,9 @@ export class BoardDurableObject {
           typeof body.spool_depth === "number" ? Math.max(0, Math.floor(body.spool_depth)) : 0,
         );
         for (const command of outcome.commands) this.broadcastThread(command.session_id);
-        return json(outcome);
+        await this.propagateMachineTransitions(outcome.machineTransitions);
+        // The sender contract stays { commands, throttled }; transitions go to the board only.
+        return json({ commands: outcome.commands, throttled: outcome.throttled });
       }
       if (url.pathname === "/internal/sessions" && request.method === "GET") {
         const limit = bounded(

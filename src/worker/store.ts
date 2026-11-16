@@ -35,6 +35,7 @@ export interface BoardBackend {
   addAudit(entry: Omit<AuditEntry, "audit_id">): void;
   addEvent(event: StoredEvent): void;
   addMessage(message: DialogueMessage): void;
+  clearMachinePresence(machineId: string): void;
   countEvents(): number;
   countMessages(threadId: string): number;
   countSessions(): number;
@@ -42,6 +43,9 @@ export interface BoardBackend {
   deleteOldestEvents(keep: number, sessionId?: string): number;
   deleteOldestSessions(keep: number): number;
   getMachine(machineId: string): MachineRow | null;
+  // Last pushed online state of a machine, persisted so it survives Durable Object eviction.
+  // Null means unknown.
+  getMachinePresence(machineId: string): boolean | null;
   getMessage(messageId: string): DialogueMessage | null;
   getSession(sessionId: string): SessionRow | null;
   hasEvent(eventId: string): boolean;
@@ -59,6 +63,7 @@ export interface BoardBackend {
   putMessage(message: DialogueMessage): void;
   putSession(session: SessionRow): void;
   sequence(): number;
+  setMachinePresence(machineId: string, online: boolean): void;
 }
 
 function isTerminal(status: DialogueStatus): boolean {
@@ -80,6 +85,7 @@ export class MemoryBoardBackend implements BoardBackend {
   private readonly audit: AuditEntry[] = [];
   private currentSequence = 0;
   private readonly events: StoredEvent[] = [];
+  private readonly machinePresence = new Map<string, boolean>();
   private readonly machines = new Map<string, MachineRow>();
   private readonly messages = new Map<string, DialogueMessage>();
   private nextAuditId = 1;
@@ -247,6 +253,18 @@ export class MemoryBoardBackend implements BoardBackend {
     this.metrics.heartbeatWrites += 1;
   }
 
+  getMachinePresence(machineId: string): boolean | null {
+    return this.machinePresence.get(machineId) ?? null;
+  }
+
+  setMachinePresence(machineId: string, online: boolean): void {
+    this.machinePresence.set(machineId, online);
+  }
+
+  clearMachinePresence(machineId: string): void {
+    this.machinePresence.delete(machineId);
+  }
+
   putSession(session: SessionRow): void {
     this.sessions.set(session.session_id, clone(session));
     this.metrics.sessionWrites += 1;
@@ -312,6 +330,9 @@ export class SqlBoardBackend implements BoardBackend {
     this.sql.exec("CREATE INDEX IF NOT EXISTS events_received ON events (received_at)");
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS machines (machine_id TEXT PRIMARY KEY, row_json TEXT NOT NULL)",
+    );
+    this.sql.exec(
+      "CREATE TABLE IF NOT EXISTS machine_presence (machine_id TEXT PRIMARY KEY, online INTEGER NOT NULL)",
     );
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS messages (message_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, session_id TEXT, machine_id TEXT, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_json TEXT NOT NULL)",
@@ -597,6 +618,28 @@ export class SqlBoardBackend implements BoardBackend {
     this.metrics.heartbeatWrites += 1;
   }
 
+  getMachinePresence(machineId: string): boolean | null {
+    const row = this.sql
+      .exec<{ online: number }>(
+        "SELECT online FROM machine_presence WHERE machine_id = ?",
+        machineId,
+      )
+      .toArray()[0];
+    return row ? row.online !== 0 : null;
+  }
+
+  setMachinePresence(machineId: string, online: boolean): void {
+    this.sql.exec(
+      "INSERT INTO machine_presence (machine_id, online) VALUES (?, ?) ON CONFLICT(machine_id) DO UPDATE SET online = excluded.online",
+      machineId,
+      online ? 1 : 0,
+    );
+  }
+
+  clearMachinePresence(machineId: string): void {
+    this.sql.exec("DELETE FROM machine_presence WHERE machine_id = ?", machineId);
+  }
+
   putSession(session: SessionRow): void {
     this.sql.exec(
       "INSERT INTO sessions (session_id, machine_id, lifecycle, last_event_at, board_seq, row_json) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET machine_id = excluded.machine_id, lifecycle = excluded.lifecycle, last_event_at = excluded.last_event_at, board_seq = excluded.board_seq, row_json = excluded.row_json",
@@ -641,6 +684,12 @@ function plusMs(iso: string, ms: number): string {
   return new Date(Date.parse(iso) + ms).toISOString();
 }
 
+// One staleness predicate for heartbeat, sweep and deadline. A machine is stale at exactly
+// last_heartbeat_at + machineStaleMs, so a sweep at the returned deadline always flips it.
+function machineOnline(row: MachineRow, nowMs: number): boolean {
+  return nowMs - Date.parse(row.last_heartbeat_at) < PERF.machineStaleMs;
+}
+
 function validBody(body: string): string {
   const trimmed = body.trim();
   if (!trimmed) throw new Error("message body is empty");
@@ -650,7 +699,6 @@ function validBody(body: string): string {
 
 export class BoardService {
   private readonly backend: BoardBackend;
-
   constructor(backend: BoardBackend) {
     this.backend = backend;
   }
@@ -731,22 +779,58 @@ export class BoardService {
     senderVersion: string,
     spoolDepth: number,
     receivedAt = new Date().toISOString(),
-  ): { commands: PendingCommand[]; throttled: boolean } {
+  ): { commands: PendingCommand[]; machineTransitions: MachineRow[]; throttled: boolean } {
     const commands = this.offerCommands(machineId, receivedAt);
     const current = this.backend.getMachine(machineId);
-    if (
-      current &&
-      Date.parse(receivedAt) - Date.parse(current.last_heartbeat_at) < PERF.heartbeatWriteThrottleMs
-    ) {
-      return { commands, throttled: true };
+    const presence = this.backend.getMachinePresence(machineId);
+    // Unknown presence is derived from row freshness without a report. A stale row counts as
+    // offline even when presence says online, so the online push stays correct after a missed
+    // sweep.
+    const wasOnline =
+      current !== null && machineOnline(current, Date.parse(receivedAt)) && presence !== false;
+    const throttled =
+      current !== null &&
+      Date.parse(receivedAt) - Date.parse(current.last_heartbeat_at) <
+        PERF.heartbeatWriteThrottleMs;
+    if (!throttled) {
+      this.backend.putMachine({
+        last_heartbeat_at: receivedAt,
+        machine_id: machineId,
+        sender_version: senderVersion,
+        spool_depth: spoolDepth,
+      });
     }
-    this.backend.putMachine({
-      last_heartbeat_at: receivedAt,
-      machine_id: machineId,
-      sender_version: senderVersion,
-      spool_depth: spoolDepth,
-    });
-    return { commands, throttled: false };
+    if (presence !== true) this.backend.setMachinePresence(machineId, true);
+    const row = wasOnline ? null : this.backend.getMachine(machineId);
+    return { commands, machineTransitions: row ? [row] : [], throttled };
+  }
+
+  // Flips machines persisted as online whose heartbeat is now stale to offline and returns their
+  // rows. Presence lives in the backend, so a freshly woken Durable Object still reports the flip.
+  // Machines with unknown presence are resolved from freshness without being reported.
+  sweepMachineTransitions(nowIso: string): MachineRow[] {
+    const nowMs = Date.parse(nowIso);
+    const transitions: MachineRow[] = [];
+    for (const row of this.backend.listMachines()) {
+      const online = machineOnline(row, nowMs);
+      const presence = this.backend.getMachinePresence(row.machine_id);
+      if (presence === online) continue;
+      this.backend.setMachinePresence(row.machine_id, online);
+      if (presence === true) transitions.push(row);
+    }
+    return transitions;
+  }
+
+  // Earliest epoch ms at which a machine persisted as online goes stale, or null when none is.
+  // Unknown machines are resolved by heartbeat or sweep, so call this after one of them.
+  nextMachineStaleDeadline(): number | null {
+    let deadline: number | null = null;
+    for (const row of this.backend.listMachines()) {
+      if (this.backend.getMachinePresence(row.machine_id) !== true) continue;
+      const staleAt = Date.parse(row.last_heartbeat_at) + PERF.machineStaleMs;
+      if (deadline === null || staleAt < deadline) deadline = staleAt;
+    }
+    return deadline;
   }
 
   private audit(
@@ -1029,5 +1113,6 @@ export class BoardService {
 
   seedMachine(row: MachineRow): void {
     this.backend.putMachine(row);
+    this.backend.clearMachinePresence(row.machine_id);
   }
 }

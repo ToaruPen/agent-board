@@ -15,6 +15,7 @@ export const PERF = {
   ingestMaxBytes: 131_072,
   ingestMaxEvents: 50,
   lastSeenWriteThrottleMs: 30_000,
+  machineStaleMs: 120_000,
   mcpDefaultLimit: 50,
   mcpMaxLimit: 100,
   readDefaultLimit: 50,

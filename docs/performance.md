@@ -44,7 +44,7 @@ This project treats cost as a bounded systems problem. Every hot path has a nume
 - State changing events flush pending tool pulses first and then flush at once.
 - The Durable Object writes a session row once per changed session per ingest batch.
 - A session row does not change only because time passed. A last seen update writes at most once per 30 seconds per session.
-- WebSocket messages go out only for changed session rows. There is no periodic full board broadcast.
+- WebSocket messages go out only for changed session rows and for machine online/offline transitions. A machine row is pushed only when its heartbeat recency crosses 120 seconds, detected on heartbeat and ingest traffic and by a Durable Object alarm. There is no per heartbeat broadcast and no periodic full board broadcast.
 - The board page opens one WebSocket. It refetches only after a sequence gap. Its one second timer updates elapsed text in the page and makes no network request.
 - MCP and read API calls use bounded limits. Session reads use the session primary key. Session lists use the machine and time index.
 - Retention pruning deletes rows. It does not hide them.
@@ -98,7 +98,7 @@ With this design:
 - Ingest requests: batches are chunked at 50 events, but timing still decides how many flushes occur. The flush count bound is the coalesced batch count plus state flushes, at most about 1,320 requests in the worst timing case. A burst that arrives inside one daemon cycle sends as one event after coalescing, as the flood test shows.
 - Session writes: at most one per changed session per ingest request. The absolute worst case follows the request count. The normal clustered case is far lower.
 - Stored events: capped at 200 for this session. Older events are deleted as new ones arrive.
-- WebSocket messages: only changed rows. A merged pulse that changes the pulse count is a change. A repeated pulse with no state change and no count change is not broadcast.
+- WebSocket messages: only changed rows. A merged pulse that changes the pulse count is a change. A repeated pulse with no state change and no count change is not broadcast. Machine rows are pushed only on online/offline transitions (heartbeat recency crossing 120 seconds), detected on heartbeat and ingest traffic and by a Durable Object alarm. There is no per heartbeat broadcast.
 
 The honest summary is that coalescing bounds bursts and the ring bounds storage. Timing can still spread work across an hour. No design that reports live state can make a continuously changing session cost zero. This design keeps the cost proportional to visible changes, with a hard storage ceiling.
 
